@@ -1,0 +1,6 @@
+{
+  "name": "Bloomberg Market Scanner",
+  "description": "A high-fidelity trading scanner styled after institutional Bloomberg Terminals, offering live market regime metrics (ATR, ADR, RVol, Volume Profile) and Gemini-powered high-probability setups or bad market alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
