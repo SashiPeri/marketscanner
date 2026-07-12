@@ -1,4 +1,12 @@
 import { initialMarkets } from "../mock/initialMarkets";
+import { Logger } from "../logging";
+import {
+  marketDataToBaseline,
+  mapScannerResultToMarketData,
+  ScannerEngine,
+} from "../scanner";
+import { MarketCacheService } from "../services/MarketCacheService";
+import { InstrumentIdentity, MarketSnapshot } from "../types/domain";
 import { MarketData, SierraConfig, SierraSyncRequest } from "../types/market";
 import { MarketProvider } from "./MarketProvider";
 
@@ -6,6 +14,9 @@ const MARKET_SIMULATION_INTERVAL_MS = 3000;
 
 export class MockMarketProvider implements MarketProvider {
   private marketsState: MarketData[] = [...initialMarkets];
+  private readonly scannerEngine: ScannerEngine;
+  private readonly marketCache: MarketCacheService;
+  private readonly logger: Logger;
   private interval: NodeJS.Timeout | null = null;
   private sierraConfig: SierraConfig = {
     localPort: 8080,
@@ -14,6 +25,18 @@ export class MockMarketProvider implements MarketProvider {
     lastSyncTime: null,
     customSymbols: [],
   };
+
+  constructor(scannerEngine: ScannerEngine, marketCache: MarketCacheService, logger: Logger) {
+    this.scannerEngine = scannerEngine;
+    this.marketCache = marketCache;
+    this.logger = logger.child({ component: "MockMarketProvider" });
+    this.scannerEngine.seedBaselines(initialMarkets.map(marketDataToBaseline));
+    this.marketCache.seed(initialMarkets);
+
+    for (const market of initialMarkets) {
+      this.seedScannerState(market);
+    }
+  }
 
   start(): void {
     if (this.interval) return;
@@ -26,21 +49,39 @@ export class MockMarketProvider implements MarketProvider {
         const newPrice = Number((market.lastPrice + priceChange).toFixed(precision));
         const newNetChange = Number((market.netChange + priceChange).toFixed(precision));
         const newPctChange = Number(((newNetChange / market.open) * 100).toFixed(2));
+        const newHigh = newPrice > market.high ? newPrice : market.high;
+        const newLow = newPrice < market.low ? newPrice : market.low;
 
-        return {
-          ...market,
+        const snapshot: MarketSnapshot = {
+          instrument: this.toInstrument(market),
           lastPrice: newPrice,
+          open: market.open,
+          high: newHigh,
+          low: newLow,
+          previousClose: market.prevClose,
           netChange: newNetChange,
-          pctChange: newPctChange,
-          high: newPrice > market.high ? newPrice : market.high,
-          low: newPrice < market.low ? newPrice : market.low,
+          percentChange: newPctChange,
+          receivedAt: new Date().toISOString(),
         };
+
+        this.scannerEngine.onMarketSnapshot(snapshot);
+        return this.marketCache.get(market.symbol) ?? market;
       });
     }, MARKET_SIMULATION_INTERVAL_MS);
+
+    this.logger.info("Mock market provider started");
+  }
+
+  stop(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+      this.logger.info("Mock market provider stopped");
+    }
   }
 
   getMarkets(): MarketData[] {
-    return this.marketsState;
+    return this.marketCache.getAll();
   }
 
   getSierraConfig(): SierraConfig {
@@ -63,7 +104,7 @@ export class MockMarketProvider implements MarketProvider {
 
     return {
       sierraConfig: this.sierraConfig,
-      markets: this.marketsState,
+      markets: this.getMarkets(),
     };
   }
 
@@ -73,45 +114,62 @@ export class MockMarketProvider implements MarketProvider {
     return this.sierraConfig;
   }
 
+  private seedScannerState(market: MarketData): void {
+    const snapshot: MarketSnapshot = {
+      instrument: this.toInstrument(market),
+      lastPrice: market.lastPrice,
+      open: market.open,
+      high: market.high,
+      low: market.low,
+      previousClose: market.prevClose,
+      netChange: market.netChange,
+      percentChange: market.pctChange,
+      receivedAt: new Date().toISOString(),
+    };
+    this.scannerEngine.onMarketSnapshot(snapshot);
+  }
+
+  private toInstrument(market: MarketData): InstrumentIdentity {
+    const assetClassMap: Record<MarketData["category"], InstrumentIdentity["assetClass"]> = {
+      FUTURES: "FUTURES",
+      FOREX: "FOREX",
+      CRYPTO: "CRYPTO",
+      EQUITIES: "EQUITIES",
+    };
+
+    return {
+      symbol: market.symbol,
+      name: market.name,
+      assetClass: assetClassMap[market.category],
+    };
+  }
+
   private addMockSierraSymbol(symbol: string): void {
     const symbolUpper = symbol.toUpperCase().trim();
     const exists = this.marketsState.some((market) => market.symbol === symbolUpper);
     if (!symbolUpper || exists) return;
 
     const basePrice = symbolUpper.includes("USD") ? 1.2500 : Math.floor(Math.random() * 200) + 50;
-    const mockItem: MarketData = {
-      symbol: symbolUpper,
-      name: `Sierra Ticker: ${symbolUpper}`,
-      category: symbolUpper.includes("USD") || symbolUpper.length === 6 ? "FOREX" : "FUTURES",
+    const snapshot: MarketSnapshot = {
+      instrument: {
+        symbol: symbolUpper,
+        name: `Sierra Ticker: ${symbolUpper}`,
+        assetClass: symbolUpper.includes("USD") || symbolUpper.length === 6 ? "FOREX" : "FUTURES",
+      },
       lastPrice: basePrice,
-      netChange: 0,
-      pctChange: 0,
       open: basePrice,
       high: basePrice,
       low: basePrice,
-      prevClose: basePrice,
-      rvol: Number((Math.random() * 1.5 + 0.4).toFixed(2)),
-      atr: Number((basePrice * 0.015).toFixed(2)),
-      adrFilledPct: Math.floor(Math.random() * 80) + 20,
-      vah: Number((basePrice * 1.005).toFixed(2)),
-      val: Number((basePrice * 0.995).toFixed(2)),
-      poc: basePrice,
-      regime: Math.random() > 0.5 ? "TRENDING_UP" : "RANGE_BOUND",
-      probScore: Math.floor(Math.random() * 60) + 40,
-      grade: "B",
-      rationale: `Imported via Sierra Chart DTC/HTTP Bridge. Real-time metrics calculating on local port ${this.sierraConfig.localPort}.`,
+      previousClose: basePrice,
+      receivedAt: new Date().toISOString(),
     };
 
-    if (mockItem.rvol > 1.4) {
-      mockItem.grade = "A+";
-      mockItem.probScore = 93;
-      mockItem.regime = "TRENDING_UP";
-    } else if (mockItem.rvol < 0.6) {
-      mockItem.grade = "F";
-      mockItem.probScore = 24;
-      mockItem.regime = "CHOPPY";
-    }
+    const result = this.scannerEngine.onMarketSnapshot(snapshot);
+    const mockItem = mapScannerResultToMarketData(result);
+    mockItem.name = `Sierra Ticker: ${symbolUpper}`;
 
     this.marketsState.push(mockItem);
+    this.marketCache.set(symbolUpper, mockItem);
+    this.scannerEngine.seedBaselines([marketDataToBaseline(mockItem)]);
   }
 }

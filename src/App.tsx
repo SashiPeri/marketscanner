@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { MarketData, SierraConfig, AIBriefing } from "./types";
+import { useMarketSocket } from "./hooks/useMarketSocket";
 import TerminalHeader from "./components/TerminalHeader";
 import ScannerGrid from "./components/ScannerGrid";
 import MarketHeatmap from "./components/MarketHeatmap";
@@ -9,7 +10,10 @@ import AIPredictionPanel from "./components/AIPredictionPanel";
 import { HelpCircle, RefreshCw, Cpu, Activity, Info, Sparkles, BookOpen, Layers, Grid } from "lucide-react";
 
 export default function App() {
-  const [markets, setMarkets] = useState<MarketData[]>([]);
+  const { markets, sierraConfig: liveSierraConfig, connectionStatus, refresh } = useMarketSocket({
+    subscription: { kind: "all" },
+  });
+
   const [sierraConfig, setSierraConfig] = useState<SierraConfig>({
     localPort: 8080,
     connectionType: "HTTP_SERVER",
@@ -17,6 +21,13 @@ export default function App() {
     lastSyncTime: null,
     customSymbols: [],
   });
+
+  // Sync sierra config from realtime hook when available
+  useEffect(() => {
+    if (liveSierraConfig) {
+      setSierraConfig(liveSierraConfig);
+    }
+  }, [liveSierraConfig]);
   
   const [selectedSymbol, setSelectedSymbol] = useState<string>("ES");
   const [viewMode, setViewMode] = useState<"GRID" | "HEATMAP">("GRID");
@@ -27,31 +38,9 @@ export default function App() {
   const [terminalNotification, setTerminalNotification] = useState<string | null>(null);
   const [errorLog, setErrorLog] = useState<string | null>(null);
 
-  // Initial fetch of market data and configuration
-  const fetchMarketData = async () => {
-    try {
-      const res = await fetch("/api/market-data");
-      if (!res.ok) throw new Error("Failed to communicate with Bloomberg server.");
-      const data = await res.json();
-      setMarkets(data.markets || []);
-      setSierraConfig(data.sierraConfig || sierraConfig);
-    } catch (err: any) {
-      console.error(err);
-      setErrorLog(err.message || "An error occurred fetching market metrics.");
-    }
-  };
-
+  // Initial AI scan on start
   useEffect(() => {
-    fetchMarketData();
-    // Fetch AI scan immediately on start
     runAiAnalysis();
-
-    // Set up continuous refresh for price changes
-    const interval = setInterval(() => {
-      fetchMarketData();
-    }, 3000);
-
-    return () => clearInterval(interval);
   }, []);
 
   // Request high-probability scanner brief from Gemini
@@ -91,7 +80,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         setSierraConfig(data.sierraConfig);
-        setMarkets(data.markets);
+        refresh();
         setTerminalNotification(`SIERRA BRIDGE ONLINE. SYNCED ${params.customSymbols.length} CUSTOM TICKERS.`);
         
         // Immediately run AI scanner update on new custom symbols!
