@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InstrumentIdentity } from "../../types/domain";
 import { SymbolState } from "../SymbolState";
-import { onTradeVwap, distanceFromVwap } from "../VWAP";
+import { detectVwapReclaim, distanceFromVwap, onTradeVwap } from "../VWAP";
 
 const instrument: InstrumentIdentity = { symbol: "ES", assetClass: "FUTURES" };
 
@@ -33,12 +33,7 @@ describe("VWAP", () => {
     state.vwap = 100;
     state.volumeMa = 5;
 
-    onTradeVwap(state, {
-      instrument,
-      price: 101,
-      size: 20,
-      receivedAt: new Date().toISOString(),
-    });
+    detectVwapReclaim(state, 101, 20);
 
     expect(state.vwapReclaim).toBe(true);
   });

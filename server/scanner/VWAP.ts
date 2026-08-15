@@ -1,24 +1,34 @@
 import { TradePrint } from "../types/domain";
 import { SCANNER_CONSTANTS } from "./constants";
-import { pushRingBuffer } from "./math";
+import { isFiniteNumber, pushRingBuffer, safeDivide } from "./math";
 import { SymbolState } from "./SymbolState";
 
 /**
  * Incremental VWAP accumulator.
+ *
  * VWAP = Σ(price × volume) / Σ(volume)
+ *
+ * Matches the standard session VWAP used by Bloomberg, TradingView, and
+ * most execution algos when fed trade prints (or volume-delta snapshots).
  */
 export function updateVwap(state: SymbolState, price: number, volume: number): void {
-  if (volume <= 0) return;
+  if (!isFiniteNumber(price) || !isFiniteNumber(volume) || volume <= 0) return;
 
   state.prevVwap = state.vwap;
   state.vwapCumPV += price * volume;
   state.vwapCumV += volume;
-  state.vwap = state.vwapCumV > 0 ? state.vwapCumPV / state.vwapCumV : price;
+
+  if (state.vwapCumV > 0 && isFiniteNumber(state.vwapCumPV)) {
+    const next = state.vwapCumPV / state.vwapCumV;
+    state.vwap = isFiniteNumber(next) ? next : price;
+  } else {
+    state.vwap = price;
+  }
 }
 
 /** Signed distance between last price and VWAP in price units. */
 export function distanceFromVwap(state: SymbolState, price: number): number {
-  if (state.vwap <= 0) return 0;
+  if (!isFiniteNumber(price) || !isFiniteNumber(state.vwap) || state.vwapCumV <= 0) return 0;
   return price - state.vwap;
 }
 
@@ -28,7 +38,8 @@ export function distanceFromVwap(state: SymbolState, price: number): number {
  */
 export function detectVwapReclaim(state: SymbolState, price: number, volume: number): void {
   state.vwapReclaim = false;
-  if (state.prevVwap <= 0 || state.prevPrice <= 0) return;
+  if (!(state.prevVwap > 0) || !(state.prevPrice > 0)) return;
+  if (!isFiniteNumber(price) || !isFiniteNumber(volume)) return;
 
   const volumeThreshold = state.volumeMa * SCANNER_CONSTANTS.VWAP_RECLAIM_VOLUME_MULTIPLIER;
   const crossedAbove = state.prevPrice < state.prevVwap && price > state.vwap;
@@ -45,7 +56,8 @@ export function detectVwapReclaim(state: SymbolState, price: number, volume: num
  */
 export function detectVwapRejection(state: SymbolState, price: number, volume: number): void {
   state.vwapRejection = false;
-  if (state.prevVwap <= 0 || state.prevPrice <= 0) return;
+  if (!(state.prevVwap > 0) || !(state.prevPrice > 0)) return;
+  if (!isFiniteNumber(price) || !isFiniteNumber(volume)) return;
 
   const volumeThreshold = state.volumeMa * SCANNER_CONSTANTS.VWAP_RECLAIM_VOLUME_MULTIPLIER;
   const crossedBelow = state.prevPrice > state.prevVwap && price < state.vwap;
@@ -56,19 +68,37 @@ export function detectVwapRejection(state: SymbolState, price: number, volume: n
   }
 }
 
-/** Update rolling volume moving average used by VWAP signal detection. */
+/**
+ * Update rolling volume moving average used by VWAP signal detection.
+ * O(1) via running sum — avoids Array.reduce on every trade.
+ */
 export function updateVolumeMa(state: SymbolState, volume: number): void {
-  pushRingBuffer(state.recentVolumes, volume, SCANNER_CONSTANTS.VOLUME_MA_PERIOD);
-  if (state.recentVolumes.length === 0) {
-    state.volumeMa = volume;
-    return;
+  if (!isFiniteNumber(volume) || volume < 0) return;
+
+  state.volumeMaSum += volume;
+  const evicted = pushRingBuffer(state.recentVolumes, volume, SCANNER_CONSTANTS.VOLUME_MA_PERIOD);
+  if (evicted !== undefined) {
+    state.volumeMaSum -= evicted;
   }
-  const sum = state.recentVolumes.reduce((acc, v) => acc + v, 0);
-  state.volumeMa = sum / state.recentVolumes.length;
+
+  const n = state.recentVolumes.length;
+  state.volumeMa = n > 0 ? safeDivide(state.volumeMaSum, n, volume) : volume;
+
+  // Guard against accumulated float drift in the running sum.
+  if (!isFiniteNumber(state.volumeMaSum) || state.volumeMaSum < 0) {
+    let sum = 0;
+    for (let i = 0; i < state.recentVolumes.length; i++) {
+      sum += state.recentVolumes[i];
+    }
+    state.volumeMaSum = sum;
+    state.volumeMa = n > 0 ? sum / n : volume;
+  }
 }
 
 /** Process a trade print for VWAP and signal detection. */
 export function onTradeVwap(state: SymbolState, trade: TradePrint): void {
+  if (!isFiniteNumber(trade.price) || !isFiniteNumber(trade.size) || trade.size <= 0) return;
+
   updateVolumeMa(state, trade.size);
   updateVwap(state, trade.price, trade.size);
   detectVwapReclaim(state, trade.price, trade.size);

@@ -3,7 +3,7 @@ import { classifyAdrPosition } from "./ADR";
 import { classifyRvol } from "./RelativeVolume";
 import { classifyVolatility } from "./ATR";
 import { SCANNER_CONSTANTS } from "./constants";
-import { clamp, linearSlope, pushRingBuffer } from "./math";
+import { clamp, isFiniteNumber, linearSlope, pushRingBuffer } from "./math";
 import { isOpeningRangeBreakoutDown, isOpeningRangeBreakoutUp } from "./SessionMetrics";
 import { SymbolState, ScannerMetricsRegime } from "./SymbolState";
 
@@ -14,20 +14,30 @@ export interface RegimeAnalysis {
   volatilityClass: "LOW" | "NORMAL" | "HIGH" | "EXTREME";
 }
 
+/** Minimum ATR used when normalizing slope — prevents explode-to-infinity. */
+const ATR_NORM_FLOOR_RATIO = 1e-6;
+
 /**
  * Regime detection combining price structure, volume, ADR position, and order flow.
  *
- * - TREND: directional slope with confirming delta
+ * - TREND: directional slope with confirming structure
  * - BALANCE: rotation between value area boundaries
  * - ROTATION: low RVol chop inside prior range
- * - BREAKOUT: price outside value area or opening range with volume
+ * - BREAKOUT: price outside value area or opening range
  */
 export function detectRegime(state: SymbolState, snapshot: MarketSnapshot): RegimeAnalysis {
   const price = snapshot.lastPrice;
-  pushRingBuffer(state.recentPrices, price, SCANNER_CONSTANTS.PRICE_HISTORY_LENGTH);
+  if (isFiniteNumber(price)) {
+    pushRingBuffer(state.recentPrices, price, SCANNER_CONSTANTS.PRICE_HISTORY_LENGTH);
+  }
 
   const slope = linearSlope(state.recentPrices);
-  const normalizedSlope = state.currentAtr > 0 ? slope / state.currentAtr : slope;
+  const atrFloor = Math.max(
+    state.currentAtr,
+    Math.abs(price) * ATR_NORM_FLOOR_RATIO,
+    Number.EPSILON,
+  );
+  const normalizedSlope = isFiniteNumber(slope) ? slope / atrFloor : 0;
   const trendStrength = clamp(Math.abs(normalizedSlope) * 50, 0, 100);
 
   state.trendStrength = trendStrength;
@@ -64,7 +74,12 @@ export function detectRegime(state: SymbolState, snapshot: MarketSnapshot): Regi
   } else if (subRegime === "BALANCE") {
     regime = "RANGE_BOUND";
   } else if (state.recentPrices.length >= SCANNER_CONSTANTS.MIN_REGIME_SAMPLES) {
-    regime = normalizedSlope > 0.005 ? "TRENDING_UP" : normalizedSlope < -0.005 ? "TRENDING_DOWN" : "RANGE_BOUND";
+    regime =
+      normalizedSlope > 0.005
+        ? "TRENDING_UP"
+        : normalizedSlope < -0.005
+          ? "TRENDING_DOWN"
+          : "RANGE_BOUND";
   }
 
   state.regime = regime;

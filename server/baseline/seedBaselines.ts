@@ -75,6 +75,7 @@ export function cumulativeCurveFraction(
   bucketMinutes = 15,
 ): number {
   if (curve.length === 0) return 1;
+  if (!Number.isFinite(hourUtc) || !Number.isFinite(minuteUtc)) return 1;
 
   const sessionStartMinutes = sessionStartHourUtc * 60 + sessionStartMinuteUtc;
   const nowMinutes = hourUtc * 60 + minuteUtc;

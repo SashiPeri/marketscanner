@@ -17,6 +17,7 @@ Market Scanner is a single-process TypeScript monolith: Express HTTP server, Web
 | Event Bus | `server/events/` | In-process pub/sub between subsystems |
 | Realtime | `server/realtime/` | WebSocket transport, batching, subscriptions |
 | Providers | `server/providers/` | Mock and Sierra adapters behind `MarketProvider` |
+| Sierra Integration | `server/sierra-integration/` | Abstractions for tape, history, replay, TAL fills/executions, fill↔scanner correlation |
 | Health | `server/health/` | Liveness, readiness, and composite health |
 | Metrics | `server/metrics/` | In-process counters and latency histograms |
 | Lifecycle | `server/lifecycle/` | Graceful shutdown orchestration |
@@ -39,6 +40,7 @@ No worker threads or child processes in Phase 4D.
 3. **Persistence repositories** — swap memory/JSON for database backends
 4. **Logger** — wrap JsonLogger for external log shipping
 5. **MetricsService** — add Prometheus exposition format alongside JSON
+6. **Sierra Integration** — implement DTC/TAL/ACSIL adapters behind `server/sierra-integration` interfaces without modifying `server/providers/sierra/` codecs. See [docs/SIERRA_INTEGRATION.md](docs/SIERRA_INTEGRATION.md).
 
 ## Dependency Graph
 

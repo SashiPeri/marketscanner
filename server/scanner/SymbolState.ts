@@ -78,6 +78,8 @@ export class SymbolState {
 
   recentPrices: number[] = [];
   recentVolumes: number[] = [];
+  /** Running sum of recentVolumes — keeps volume MA O(1). */
+  volumeMaSum = 0;
   volumeMa = 0;
 
   regime: ScannerMetricsRegime = "UNKNOWN";
@@ -124,17 +126,38 @@ export class SymbolState {
 
   /** Apply fallback estimates when provider data lacks historical baselines. */
   applyFallbackBaselines(price: number): void {
-    if (this.averageDailyRange <= 0) {
-      this.averageDailyRange = price * SCANNER_CONSTANTS.FALLBACK_ADR_PRICE_RATIO;
+    const px = Number.isFinite(price) && price > 0 ? price : 0;
+    if (px <= 0) return;
+
+    if (!(this.averageDailyRange > 0) || !Number.isFinite(this.averageDailyRange)) {
+      this.averageDailyRange = px * SCANNER_CONSTANTS.FALLBACK_ADR_PRICE_RATIO;
     }
-    if (this.averageSessionVolume <= 0) {
-      this.averageSessionVolume = Math.max(1, price * SCANNER_CONSTANTS.FALLBACK_AVG_VOLUME_RATIO * 1000);
+    if (!(this.averageSessionVolume > 0) || !Number.isFinite(this.averageSessionVolume)) {
+      this.averageSessionVolume = Math.max(1, px * SCANNER_CONSTANTS.FALLBACK_AVG_VOLUME_RATIO * 1000);
     }
   }
 
-  /** Price bucket key for volume profile histogram. */
+  /**
+   * Integer tick-index bucket for volume profile histogram keys.
+   * Integer keys avoid IEEE-754 equality failures in POC/VA lookups.
+   */
+  priceToBucketIndex(price: number): number {
+    const ts = this.tickSize > 0 && Number.isFinite(this.tickSize)
+      ? this.tickSize
+      : SCANNER_CONSTANTS.DEFAULT_TICK_SIZE;
+    return Math.round(price / ts);
+  }
+
+  /** Convert a tick-index bucket back to a display/price level. */
+  bucketIndexToPrice(index: number): number {
+    const ts = this.tickSize > 0 && Number.isFinite(this.tickSize)
+      ? this.tickSize
+      : SCANNER_CONSTANTS.DEFAULT_TICK_SIZE;
+    return index * ts;
+  }
+
+  /** @deprecated Prefer priceToBucketIndex — retained for call-site compatibility. */
   priceToBucket(price: number): number {
-    const ts = this.tickSize;
-    return Math.round(price / ts) * ts;
+    return this.priceToBucketIndex(price);
   }
 }
