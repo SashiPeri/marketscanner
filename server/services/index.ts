@@ -10,6 +10,10 @@ import { createMarketProvider } from "../providers/createMarketProvider";
 import { MarketProvider } from "../providers/MarketProvider";
 import { RealtimeHub, RealtimeServer, DEFAULT_REALTIME_CONFIG } from "../realtime";
 import { ScannerEngine } from "../scanner";
+import { TradeLifecycleEngine } from "../trade/TradeLifecycleEngine";
+import { TradeLifecycleRepository } from "../trade/derived/TradeLifecycleRepository";
+import { RawFillRepository } from "../trade/raw/RawFillRepository";
+import { RawOrderRepository } from "../trade/raw/RawOrderRepository";
 import { MarketCacheService } from "./MarketCacheService";
 import { MarketDataService } from "./MarketDataService";
 import { SierraBridgeService } from "./SierraBridgeService";
@@ -33,6 +37,11 @@ export interface ServiceContainer {
   metricsService: MetricsService;
   healthService: HealthService;
   websocketAttached: boolean;
+  // Phase N — trade lifecycle (optional until wired by a controller)
+  tradeLifecycleEngine?: TradeLifecycleEngine;
+  rawFillRepository?: RawFillRepository;
+  rawOrderRepository?: RawOrderRepository;
+  tradeLifecycleRepository?: TradeLifecycleRepository;
 }
 
 export async function createServices(config: ServerConfig): Promise<ServiceContainer> {
