@@ -1,8 +1,12 @@
 import { BaselineStore, createBaselineStore } from "../baseline";
 import { ServerConfig } from "../config";
+import { EntitlementService } from "../entitlement";
 import { EventBus, ScannerEventBridge } from "../events";
 import { GeminiService } from "../gemini/GeminiService";
 import { HealthService } from "../health";
+import { JsonTradeJournalRepository } from "../journal/json/JsonTradeJournalRepository";
+import { MemoryTradeJournalRepository } from "../journal/memory/MemoryTradeJournalRepository";
+import { TradeJournalServiceImpl } from "../journal/TradeJournalServiceImpl";
 import { createLogger, Logger } from "../logging";
 import { MetricsService } from "../metrics";
 import { createPersistence, PersistenceBundle } from "../persistence";
@@ -10,6 +14,8 @@ import { createMarketProvider } from "../providers/createMarketProvider";
 import { MarketProvider } from "../providers/MarketProvider";
 import { RealtimeHub, RealtimeServer, DEFAULT_REALTIME_CONFIG } from "../realtime";
 import { ScannerEngine } from "../scanner";
+import { ScannerConfigRepository } from "../scanner/ScannerConfigRepository";
+import { WatchlistRepository } from "../scanner/WatchlistRepository";
 import { TradeLifecycleEngine } from "../trade/TradeLifecycleEngine";
 import { TradeLifecycleRepository } from "../trade/derived/TradeLifecycleRepository";
 import { RawFillRepository } from "../trade/raw/RawFillRepository";
@@ -37,6 +43,12 @@ export interface ServiceContainer {
   metricsService: MetricsService;
   healthService: HealthService;
   websocketAttached: boolean;
+  // V1 scanner config + watchlist
+  scannerConfigRepo: ScannerConfigRepository;
+  watchlistRepo: WatchlistRepository;
+  entitlementService: EntitlementService;
+  // V1 trade journal
+  journalService: TradeJournalServiceImpl;
   // Phase N — trade lifecycle (optional until wired by a controller)
   tradeLifecycleEngine?: TradeLifecycleEngine;
   rawFillRepository?: RawFillRepository;
@@ -92,6 +104,30 @@ export async function createServices(config: ServerConfig): Promise<ServiceConta
     logger.child({ component: "RealtimeServer" }),
   );
 
+  // V1 additions: entitlement, scanner config, watchlist, journal
+  const entitlementService = new EntitlementService(config);
+
+  const scannerConfigRepo = new ScannerConfigRepository(config.dataDir, config.persistenceMode);
+  scannerConfigRepo.load();
+
+  const watchlistRepo = new WatchlistRepository(config.dataDir, config.persistenceMode);
+  watchlistRepo.load();
+
+  const journalRepo =
+    config.persistenceMode === "json"
+      ? new JsonTradeJournalRepository(
+          `${config.dataDir}/journal.json`,
+          logger.child({ component: "TradeJournal" }),
+        )
+      : new MemoryTradeJournalRepository();
+
+  // Load journal if JSON
+  if (config.persistenceMode === "json" && journalRepo instanceof JsonTradeJournalRepository) {
+    await journalRepo.load();
+  }
+
+  const journalService = new TradeJournalServiceImpl(journalRepo, scannerEngine, marketCache);
+
   const container: ServiceContainer = {
     logger,
     config,
@@ -111,6 +147,10 @@ export async function createServices(config: ServerConfig): Promise<ServiceConta
     metricsService,
     healthService: null as unknown as HealthService,
     websocketAttached: false,
+    entitlementService,
+    scannerConfigRepo,
+    watchlistRepo,
+    journalService,
   };
 
   const healthService = new HealthService({

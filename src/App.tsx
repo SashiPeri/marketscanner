@@ -280,10 +280,10 @@ export default function App() {
         </div>
       </main>
 
-      {/* Institutional Legal Disclaimer bar */}
+      {/* Footer */}
       <footer className="bg-black border-t border-[#1f2833] py-2 px-4 text-center text-gray-600 text-[10px] select-none">
         <p>
-          BLOOMBERG TERMINAL &copy; {new Date().getFullYear()} Bloomberg L.P. ALL RIGHTS RESERVED. FOR INSTITUTIONAL RESEARCH USE ONLY. SIERRA CHARTS DTC STREAM BRIDGE COMMUNICATING SECURELY ON LOCAL NETWORK.
+          MarketScanner &copy; {new Date().getFullYear()} — General-purpose multi-symbol market scanner. For informational purposes only. Not financial advice.
         </p>
       </footer>
     </div>

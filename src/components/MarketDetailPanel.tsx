@@ -282,8 +282,9 @@ export default function MarketDetailPanel({ market }: MarketDetailPanelProps) {
               </div>
             ) : activeTab === "ORDERFLOW" ? (
               <div className="p-3 flex-1 overflow-y-auto space-y-2">
-                <div className="text-[10px] text-orange-400 font-bold tracking-wider uppercase mb-1">
+                <div className="text-[10px] text-orange-400 font-bold tracking-wider uppercase mb-1 flex items-center gap-2">
                   ORDER BOOK DEPTH OF MARKET (DOM)
+                  <span className="text-[8px] bg-yellow-900/40 text-yellow-400 border border-yellow-600/40 px-1.5 py-0.5 rounded font-bold">SIMULATED</span>
                 </div>
                 {/* Ask Grid */}
                 <div className="space-y-1">
@@ -345,8 +346,9 @@ export default function MarketDetailPanel({ market }: MarketDetailPanelProps) {
         {/* Right Column: Time & Sales / Execution Ticker */}
         <div className="p-3 bg-[#0a0d12] overflow-y-auto space-y-2 flex flex-col justify-between">
           <div>
-            <div className="text-[10px] text-orange-400 font-bold uppercase tracking-wider mb-2 border-b border-[#1f2833] pb-1">
+            <div className="text-[10px] text-orange-400 font-bold uppercase tracking-wider mb-2 border-b border-[#1f2833] pb-1 flex items-center gap-2">
               TIME & SALES (ORDER FLOW)
+              <span className="text-[8px] bg-yellow-900/40 text-yellow-400 border border-yellow-600/40 px-1.5 py-0.5 rounded font-bold">SIMULATED</span>
             </div>
             <div className="space-y-1 max-h-[220px] overflow-y-auto pr-1">
               {tradesHistory.map((t, i) => (

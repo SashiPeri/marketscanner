@@ -73,6 +73,9 @@ export function loadConfig(): ServerConfig {
     throw new ConfigValidationError(`Invalid SIERRA_PORT: ${process.env.SIERRA_PORT}`);
   }
 
+  const maxSymbolsRaw = process.env.MAX_SYMBOLS;
+  const maxSymbols = maxSymbolsRaw ? Number(maxSymbolsRaw) : undefined;
+
   return {
     port: parsePort(process.env.PORT),
     nodeEnv,
@@ -93,5 +96,7 @@ export function loadConfig(): ServerConfig {
     gracefulShutdownTimeoutMs: Number(
       process.env.SHUTDOWN_TIMEOUT_MS || CONFIG_DEFAULTS.gracefulShutdownTimeoutMs,
     ),
+    maxSymbols: maxSymbols !== undefined && Number.isFinite(maxSymbols) ? maxSymbols : undefined,
+    apiKey: process.env.API_KEY || undefined,
   };
 }

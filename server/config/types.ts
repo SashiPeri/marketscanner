@@ -23,6 +23,10 @@ export interface ServerConfig {
   buildTimestamp: string;
   batchIntervalMs: number;
   gracefulShutdownTimeoutMs: number;
+  /** Maximum number of symbols allowed; overrides tier default when set. */
+  maxSymbols?: number;
+  /** API key for guarding /api routes; optional, unenforced if absent. */
+  apiKey?: string;
 }
 
 export const CONFIG_DEFAULTS = {

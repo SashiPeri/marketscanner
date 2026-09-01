@@ -1,5 +1,13 @@
+// ScannerGrid.tsx — Complete V1 rewrite with configurable indicators,
+// filter bar, sortable columns, symbol universe manager, and entitlement display.
+
+import { useState, useMemo, useCallback } from "react";
 import { MarketData } from "../types";
-import { TrendingUp, TrendingDown, RefreshCw, BarChart2, ShieldAlert, ArrowUpRight, ArrowDownRight, CircleSlash, Sparkles, Filter } from "lucide-react";
+import { useScannerConfig, IndicatorId, SortConfig } from "../hooks/useScannerConfig";
+import {
+  TrendingUp, TrendingDown, BarChart2, CircleSlash, Filter,
+  ChevronUp, ChevronDown, Settings2, X, Plus, Search, AlertTriangle, Layers
+} from "lucide-react";
 
 interface ScannerGridProps {
   markets: MarketData[];
@@ -7,7 +15,94 @@ interface ScannerGridProps {
   selectedSymbol: string;
 }
 
+interface QuickFilters {
+  search: string; minRvol: string; maxAdr: string;
+  regime: string; minScore: string; category: string;
+}
+
+const REGIME_OPTIONS = ["ALL", "TRENDING_UP", "TRENDING_DOWN", "RANGE_BOUND", "CHOPPY"];
+const CATEGORY_OPTIONS = ["ALL", "FUTURES", "FOREX", "CRYPTO", "EQUITIES"];
+const INDICATOR_LABELS: Record<IndicatorId, string> = {
+  rvol: "RVol", adr: "ADR%", atr: "ATR", vwap: "VWAP", regime: "Regime",
+  score: "Score", grade: "Grade", delta: "Δ Delta", vah: "VAH", val: "VAL",
+  poc: "POC", pctChange: "%Change", netChange: "Net Chg", signals: "Signals",
+};
+const DEFAULT_SELECTED: IndicatorId[] = ["rvol", "adr", "atr", "regime", "score", "grade", "vwap", "pctChange"];
+
+function ScoreBar({ score }: { score: number }) {
+  const color = score >= 85 ? "#00ffcc" : score >= 65 ? "#ffeb3b" : "#ff1744";
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-12 bg-gray-800 rounded-full h-1.5 overflow-hidden border border-gray-700">
+        <div className="h-full rounded-full transition-all" style={{ width: `${score}%`, backgroundColor: color }} />
+      </div>
+      <span className="font-bold text-[11px]" style={{ color }}>{score}</span>
+    </div>
+  );
+}
+
 export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }: ScannerGridProps) {
+  const { config, watchlist, entitlement, addSymbol, removeSymbol, updateConfig } = useScannerConfig();
+  const selectedIndicators: IndicatorId[] = config?.selectedIndicators ?? DEFAULT_SELECTED;
+  const sort: SortConfig = config?.sort ?? { indicator: "score", direction: "desc" };
+
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const [showUniverseManager, setShowUniverseManager] = useState(false);
+  const [newSymbolInput, setNewSymbolInput] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+  const [quickFilters, setQuickFilters] = useState<QuickFilters>({
+    search: "", minRvol: "", maxAdr: "", regime: "ALL", minScore: "", category: "ALL",
+  });
+
+  const handleSortChange = useCallback((col: SortConfig["indicator"]) => {
+    const newDir: "asc" | "desc" = sort.indicator === col && sort.direction === "desc" ? "asc" : "desc";
+    updateConfig({ sort: { indicator: col, direction: newDir } });
+  }, [sort, updateConfig]);
+
+  const handleToggleIndicator = useCallback((id: IndicatorId) => {
+    const updated = selectedIndicators.includes(id)
+      ? selectedIndicators.filter((x) => x !== id)
+      : [...selectedIndicators, id];
+    updateConfig({ selectedIndicators: updated });
+  }, [selectedIndicators, updateConfig]);
+
+  const handleAddSymbol = useCallback(async () => {
+    const sym = newSymbolInput.trim().toUpperCase();
+    if (!sym) return;
+    setAddError(null);
+    const result = await addSymbol(sym);
+    if (result.error) setAddError(result.error);
+    else setNewSymbolInput("");
+  }, [newSymbolInput, addSymbol]);
+
+  const watchlistSymbols = useMemo(() => new Set(watchlist.map((w) => w.symbol)), [watchlist]);
+
+  const filteredMarkets = useMemo(() => {
+    let result = [...markets];
+    if (watchlistSymbols.size > 0) result = result.filter((m) => watchlistSymbols.has(m.symbol));
+    if (quickFilters.search) {
+      const q = quickFilters.search.toLowerCase();
+      result = result.filter((m) => m.symbol.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
+    }
+    if (quickFilters.minRvol !== "") { const v = parseFloat(quickFilters.minRvol); if (!isNaN(v)) result = result.filter((m) => m.rvol >= v); }
+    if (quickFilters.maxAdr !== "") { const v = parseFloat(quickFilters.maxAdr); if (!isNaN(v)) result = result.filter((m) => m.adrFilledPct <= v); }
+    if (quickFilters.regime !== "ALL") result = result.filter((m) => m.regime === quickFilters.regime);
+    if (quickFilters.minScore !== "") { const v = parseFloat(quickFilters.minScore); if (!isNaN(v)) result = result.filter((m) => m.probScore >= v); }
+    if (quickFilters.category !== "ALL") result = result.filter((m) => m.category === quickFilters.category);
+    result.sort((a, b) => {
+      const dir = sort.direction === "asc" ? 1 : -1; const col = sort.indicator;
+      if (col === "symbol") return dir * a.symbol.localeCompare(b.symbol);
+      if (col === "score") return dir * (a.probScore - b.probScore);
+      if (col === "rvol") return dir * (a.rvol - b.rvol);
+      if (col === "adr") return dir * (a.adrFilledPct - b.adrFilledPct);
+      if (col === "pctChange") return dir * (a.pctChange - b.pctChange);
+      if (col === "netChange") return dir * (a.netChange - b.netChange);
+      if (col === "atr") return dir * (a.atr - b.atr);
+      return 0;
+    });
+    return result;
+  }, [markets, watchlistSymbols, quickFilters, sort]);
+
   // Color classification for grades
   const getGradeColor = (grade: string) => {
     switch (grade) {
