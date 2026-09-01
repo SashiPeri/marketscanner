@@ -1,12 +1,11 @@
-// ScannerGrid.tsx — Complete V1 rewrite with configurable indicators,
-// filter bar, sortable columns, symbol universe manager, and entitlement display.
+// ScannerGrid.tsx — V1 market scanner: configurable columns, filters, universe management.
 
 import { useState, useMemo, useCallback } from "react";
 import { MarketData } from "../types";
 import { useScannerConfig, IndicatorId, SortConfig } from "../hooks/useScannerConfig";
 import {
   TrendingUp, TrendingDown, BarChart2, CircleSlash, Filter,
-  ChevronUp, ChevronDown, Settings2, X, Plus, Search, AlertTriangle, Layers
+  ChevronUp, ChevronDown, Settings2, X, Plus, Search, AlertTriangle, Layers,
 } from "lucide-react";
 
 interface ScannerGridProps {
@@ -136,21 +135,61 @@ export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }:
     }
   };
 
+  const SortIcon = ({ col }: { col: SortConfig["indicator"] }) => {
+    if (sort.indicator !== col) return <ChevronUp className="w-3 h-3 opacity-20 ml-0.5 inline shrink-0" />;
+    return sort.direction === "desc"
+      ? <ChevronDown className="w-3 h-3 text-orange-400 ml-0.5 inline shrink-0" />
+      : <ChevronUp className="w-3 h-3 text-orange-400 ml-0.5 inline shrink-0" />;
+  };
+
+  const renderCell = (m: MarketData, id: IndicatorId) => {
+    switch (id) {
+      case "pctChange": { const pos = m.pctChange >= 0; return <td key={id} className="p-2 border-r text-right tabular-nums"><span className={`font-bold text-[11px] ${pos ? "text-[#00e676]" : "text-[#ff1744]"}`}>{pos ? "+" : ""}{m.pctChange.toFixed(2)}%</span></td>; }
+      case "netChange": { const pos = m.netChange >= 0; return <td key={id} className="p-2 border-r text-right tabular-nums"><span className={`font-bold text-[11px] ${pos ? "text-[#00e676]" : "text-[#ff1744]"}`}>{pos ? "+" : ""}{m.netChange.toFixed(2)}</span></td>; }
+      case "rvol": { const h = m.rvol >= 1.5; const l = m.rvol < 0.8; return <td key={id} className="p-2 border-r text-center"><span className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${h ? "bg-[#00e67618] text-[#00ffcc] border border-[#00ffcc44]" : l ? "bg-[#ff174415] text-[#ff5252]" : "text-gray-300"}`}>{m.rvol.toFixed(1)}x</span></td>; }
+      case "adr": { const o = m.adrFilledPct >= 80; return <td key={id} className="p-2 border-r"><div className="flex flex-col gap-0.5 min-w-[52px]"><div className="w-full bg-[#151a22] rounded-full h-1.5 overflow-hidden border border-gray-800"><div className={`h-full rounded-full ${o ? "bg-[#ff9100]" : "bg-[#00e676]"}`} style={{ width: `${Math.min(m.adrFilledPct, 100)}%` }} /></div><span className={`text-[9px] font-bold ${o ? "text-orange-400" : "text-gray-500"}`}>{m.adrFilledPct}%{o ? " EXT" : ""}</span></div></td>; }
+      case "atr": return <td key={id} className="p-2 border-r text-right tabular-nums text-[11px] text-gray-300">{m.atr.toFixed(m.category === "FOREX" ? 4 : 2)}</td>;
+      case "vwap": return <td key={id} className="p-2 border-r text-right tabular-nums text-[11px] text-[#45f3ff]">{m.poc.toFixed(m.category === "FOREX" ? 4 : 2)}</td>;
+      case "vah": return <td key={id} className="p-2 border-r text-right tabular-nums text-[11px] text-gray-400">{m.vah.toFixed(2)}</td>;
+      case "val": return <td key={id} className="p-2 border-r text-right tabular-nums text-[11px] text-gray-400">{m.val.toFixed(2)}</td>;
+      case "poc": return <td key={id} className="p-2 border-r text-right tabular-nums text-[11px] text-yellow-400">{m.poc.toFixed(2)}</td>;
+      case "regime": return <td key={id} className="p-2 border-r"><span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase whitespace-nowrap ${getRegimeColor(m.regime)}`}>{getRegimeIcon(m.regime)}{m.regime.replace(/_/g, " ")}</span></td>;
+      case "score": { const c = m.probScore >= 85 ? "#00ffcc" : m.probScore >= 65 ? "#ffeb3b" : "#ff1744"; return <td key={id} className="p-2 border-r"><div className="flex items-center gap-1.5 min-w-[72px]"><div className="flex-1 bg-gray-800 rounded-full h-1.5 border border-gray-700"><div className="h-full rounded-full" style={{ width: `${Math.min(m.probScore, 100)}%`, backgroundColor: c }} /></div><span className="font-bold text-[11px] w-6 text-right" style={{ color: c }}>{m.probScore}</span></div></td>; }
+      case "grade": return <td key={id} className="p-2 border-r text-center"><span className={`text-sm ${getGradeColor(m.grade)}`}>{m.grade}</span></td>;
+      case "delta": return <td key={id} className="p-2 border-r text-right text-[11px] text-gray-600">—</td>;
+      case "signals": return <td key={id} className="p-2 border-r text-[10px] text-gray-500 max-w-[120px] truncate">{m.rationale ? m.rationale.slice(0, 40) + "…" : "—"}</td>;
+      default: return <td key={id} className="p-2 border-r text-gray-600">—</td>;
+    }
+  };
+
+  const SORTABLE: Partial<Record<string, true>> = { symbol: true, score: true, rvol: true, adr: true, pctChange: true, netChange: true, atr: true };
+  const renderColHeader = (id: IndicatorId) => {
+    const sortable = !!SORTABLE[id];
+    const sortKey = id as SortConfig["indicator"];
+    return <th key={id} className={`p-2 border-r border-[#1a2030] text-orange-500 whitespace-nowrap text-[10px] uppercase tracking-wider ${sortable ? "cursor-pointer hover:bg-[#1a2030]" : ""}`} onClick={sortable ? () => handleSortChange(sortKey) : undefined}>{INDICATOR_LABELS[id]}{sortable && <SortIcon col={sortKey} />}</th>;
+  };
+
+  const hasActiveFilters = quickFilters.search !== "" || quickFilters.minRvol !== "" || quickFilters.maxAdr !== "" || quickFilters.regime !== "ALL" || quickFilters.minScore !== "" || quickFilters.category !== "ALL";
+  const clearFilters = () => setQuickFilters({ search: "", minRvol: "", maxAdr: "", regime: "ALL", minScore: "", category: "ALL" });
+
   return (
-    <div id="scanner-grid-container" className="bg-[#0b0c10] border-2 border-[#1f2833] rounded overflow-hidden font-mono flex flex-col h-full">
-      {/* Grid Control Header */}
-      <div className="bg-[#1f2833] px-3 py-2 border-b border-[#0b0c10] flex justify-between items-center text-xs">
-        <span className="text-white font-extrabold flex items-center gap-1.5 uppercase">
-          <Filter className="w-3.5 h-3.5 text-orange-500" />
-          ACTIVE MARKET SCANNER <span className="text-gray-400 text-[10px] lowercase">({markets.length} tracked)</span>
-        </span>
-        <div className="flex items-center gap-4 text-gray-400 text-[10px]">
-          <span className="flex items-center gap-1 text-[#00e676]">
-            <span className="inline-block w-2 h-2 bg-[#00e676] rounded-full animate-pulse"></span> HIGH EDGE
-          </span>
-          <span className="flex items-center gap-1 text-[#ff1744]">
-            <span className="inline-block w-2 h-2 bg-[#ff1744] rounded-full"></span> AVOID CHOP
-          </span>
+    <div className="bg-[#0b0c10] border-2 border-[#1f2833] rounded overflow-hidden font-mono flex flex-col h-full">
+      <div className="bg-[#111419] px-3 py-2 border-b border-[#1a2030] flex justify-between items-center flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Filter className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+          <span className="text-white font-extrabold text-[11px] uppercase tracking-wide">Market Scanner</span>
+          <span className="text-gray-500 text-[10px]">{filteredMarkets.length}/{markets.length}</span>
+          {entitlement && (<span className={`text-[9px] px-1.5 py-0.5 rounded font-bold border ${entitlement.tier === "paid" ? "bg-green-900/30 text-green-400 border-green-700/40" : "bg-gray-900 text-gray-500 border-gray-700"}`}>{entitlement.tier.toUpperCase()} · {watchlist.length}/{entitlement.maxSymbols}</span>)}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => { setShowUniverseManager(v => !v); setShowColumnPicker(false); }}
+            className={`px-2 py-1 rounded text-[10px] flex items-center gap-1 border font-bold cursor-pointer transition-colors ${showUniverseManager ? "bg-orange-500 text-black border-orange-500" : "bg-[#0b0c10] text-gray-400 hover:text-white border-gray-700"}`}>
+            <Layers className="w-3 h-3" /> Universe
+          </button>
+          <button onClick={() => { setShowColumnPicker(v => !v); setShowUniverseManager(false); }}
+            className={`px-2 py-1 rounded text-[10px] flex items-center gap-1 border font-bold cursor-pointer transition-colors ${showColumnPicker ? "bg-orange-500 text-black border-orange-500" : "bg-[#0b0c10] text-gray-400 hover:text-white border-gray-700"}`}>
+            <Settings2 className="w-3 h-3" /> Columns
+          </button>
         </div>
       </div>
 
