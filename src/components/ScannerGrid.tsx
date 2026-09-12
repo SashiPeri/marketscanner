@@ -6,6 +6,7 @@ import { useScannerConfig, IndicatorId, SortConfig } from "../hooks/useScannerCo
 import {
   TrendingUp, TrendingDown, BarChart2, CircleSlash, Filter,
   ChevronUp, ChevronDown, Settings2, X, Plus, Search, AlertTriangle, Layers,
+  Sparkles, ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
 
 interface ScannerGridProps {

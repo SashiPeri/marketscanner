@@ -14,6 +14,10 @@ export function createControllers(services: ServiceContainer) {
       services.scannerConfigRepo,
       services.watchlistRepo,
       services.entitlementService,
+      services.conditionSetRepo,
+      services.scannerEngine,
+      services.conditionEvaluator,
+      services.studyValueStore,
     ),
     journalController: new JournalController(services.journalService),
   };

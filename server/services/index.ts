@@ -13,7 +13,7 @@ import { createPersistence, PersistenceBundle } from "../persistence";
 import { createMarketProvider } from "../providers/createMarketProvider";
 import { MarketProvider } from "../providers/MarketProvider";
 import { RealtimeHub, RealtimeServer, DEFAULT_REALTIME_CONFIG } from "../realtime";
-import { ScannerEngine } from "../scanner";
+import { ConditionEvaluator, ConditionSetRepository, ScannerEngine, StudyValueStore } from "../scanner";
 import { ScannerConfigRepository } from "../scanner/ScannerConfigRepository";
 import { WatchlistRepository } from "../scanner/WatchlistRepository";
 import { TradeLifecycleEngine } from "../trade/TradeLifecycleEngine";
@@ -46,6 +46,9 @@ export interface ServiceContainer {
   // V1 scanner config + watchlist
   scannerConfigRepo: ScannerConfigRepository;
   watchlistRepo: WatchlistRepository;
+  conditionSetRepo: ConditionSetRepository;
+  conditionEvaluator: ConditionEvaluator;
+  studyValueStore: StudyValueStore;
   entitlementService: EntitlementService;
   // V1 trade journal
   journalService: TradeJournalServiceImpl;
@@ -88,9 +91,6 @@ export async function createServices(config: ServerConfig): Promise<ServiceConta
 
   marketCache.start();
 
-  const marketProvider = createMarketProvider(config, scannerEngine, marketCache, logger);
-  marketProvider.start();
-
   const realtimeHub = new RealtimeHub(
     eventBus,
     metricsService,
@@ -112,6 +112,21 @@ export async function createServices(config: ServerConfig): Promise<ServiceConta
 
   const watchlistRepo = new WatchlistRepository(config.dataDir, config.persistenceMode);
   watchlistRepo.load();
+
+  const conditionSetRepo = new ConditionSetRepository(config.dataDir, config.persistenceMode);
+  conditionSetRepo.load();
+
+  const studyValueStore = new StudyValueStore();
+  const conditionEvaluator = new ConditionEvaluator(studyValueStore);
+
+  const marketProvider = createMarketProvider(config, scannerEngine, marketCache, logger);
+  marketProvider.start();
+  const configuredUniverse = scannerConfigRepo.get().universe.length > 0
+    ? scannerConfigRepo.get().universe
+    : watchlistRepo.getSymbols();
+  if (config.marketProvider === "sierra" && configuredUniverse.length > 0) {
+    marketProvider.syncSierra({ customSymbols: configuredUniverse });
+  }
 
   const journalRepo =
     config.persistenceMode === "json"
@@ -150,6 +165,9 @@ export async function createServices(config: ServerConfig): Promise<ServiceConta
     entitlementService,
     scannerConfigRepo,
     watchlistRepo,
+    conditionSetRepo,
+    conditionEvaluator,
+    studyValueStore,
     journalService,
   };
 

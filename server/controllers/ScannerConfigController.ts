@@ -1,7 +1,11 @@
 import { Request, Response } from "express";
 import { EntitlementService } from "../entitlement";
+import { ConditionEvaluator, ConditionSet, StudyValueStore } from "../scanner";
+import { StudyValueSnapshot } from "../types";
 import { ScannerConfig } from "../scanner/ScannerConfig";
 import { ScannerConfigRepository } from "../scanner/ScannerConfigRepository";
+import { ConditionSetRepository } from "../scanner/ConditionSetRepository";
+import { ScannerEngine } from "../scanner/ScannerEngine";
 import { WatchlistRepository, WatchlistSymbol } from "../scanner/WatchlistRepository";
 import { INDICATOR_REGISTRY } from "../scanner/ScannerConfig";
 
@@ -10,6 +14,10 @@ export class ScannerConfigController {
     private readonly configRepo: ScannerConfigRepository,
     private readonly watchlist: WatchlistRepository,
     private readonly entitlement: EntitlementService,
+    private readonly conditionSetRepo: ConditionSetRepository,
+    private readonly scannerEngine: ScannerEngine,
+    private readonly conditionEvaluator: ConditionEvaluator,
+    private readonly studyValueStore: StudyValueStore,
   ) {}
 
   getConfig = (_req: Request, res: Response): void => {
@@ -20,6 +28,7 @@ export class ScannerConfigController {
       config,
       entitlement: ent,
       indicatorRegistry: INDICATOR_REGISTRY,
+      conditionSets: this.conditionSetRepo.getAll(),
     });
   };
 
@@ -133,5 +142,84 @@ export class ScannerConfigController {
 
   getEntitlement = (_req: Request, res: Response): void => {
     res.json({ success: true, entitlement: this.entitlement.getEntitlement() });
+  };
+
+  getConditionSets = (_req: Request, res: Response): void => {
+    res.json({
+      success: true,
+      conditionSets: this.conditionSetRepo.getAll(),
+    });
+  };
+
+  replaceConditionSets = (
+    req: Request<unknown, unknown, { conditionSets: ConditionSet[] }>,
+    res: Response,
+  ): void => {
+    const { conditionSets } = req.body;
+
+    if (!Array.isArray(conditionSets)) {
+      res.status(400).json({ success: false, error: "conditionSets array is required" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      conditionSets: this.conditionSetRepo.replaceAll(conditionSets),
+    });
+  };
+
+  getConditionMatches = (_req: Request, res: Response): void => {
+    const enabledConditionSets = this.conditionSetRepo.getAll().filter((set) => set.enabled);
+    const results = this.scannerEngine.getAllResults();
+    const matches = enabledConditionSets.flatMap((conditionSet) =>
+      results.map((result) => this.conditionEvaluator.evaluate(conditionSet, result)),
+    );
+
+    res.json({
+      success: true,
+      evaluatedSymbols: results.length,
+      conditionSets: enabledConditionSets.length,
+      matches: matches.filter((match) => match.matched),
+      evaluations: matches,
+    });
+  };
+
+  upsertStudyValues = (
+    req: Request<unknown, unknown, StudyValueSnapshot>,
+    res: Response,
+  ): void => {
+    const snapshot = req.body;
+
+    if (!snapshot?.instrument?.symbol || !Array.isArray(snapshot.values)) {
+      res.status(400).json({
+        success: false,
+        error: "instrument.symbol and values array are required",
+      });
+      return;
+    }
+
+    const normalized: StudyValueSnapshot = {
+      ...snapshot,
+      instrument: {
+        ...snapshot.instrument,
+        symbol: snapshot.instrument.symbol.toUpperCase(),
+      },
+      receivedAt: snapshot.receivedAt || new Date().toISOString(),
+      values: snapshot.values.map((value) => ({
+        ...value,
+        receivedAt: value.receivedAt || new Date().toISOString(),
+      })),
+    };
+
+    this.studyValueStore.set(normalized);
+    res.json({ success: true, snapshot: normalized });
+  };
+
+  getStudyValues = (_req: Request, res: Response): void => {
+    res.json({
+      success: true,
+      count: this.studyValueStore.size(),
+      snapshots: this.studyValueStore.getAll(),
+    });
   };
 }

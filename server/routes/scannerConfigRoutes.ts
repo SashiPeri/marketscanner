@@ -18,5 +18,12 @@ export function createScannerConfigRoutes(ctrl: ScannerConfigController): Router
   // Entitlement
   router.get("/scanner/entitlement", asyncHandler(ctrl.getEntitlement));
 
+  // Server-side scan conditions
+  router.get("/scanner/condition-sets", asyncHandler(ctrl.getConditionSets));
+  router.put("/scanner/condition-sets", asyncHandler(ctrl.replaceConditionSets));
+  router.get("/scanner/condition-matches", asyncHandler(ctrl.getConditionMatches));
+  router.get("/scanner/study-values", asyncHandler(ctrl.getStudyValues));
+  router.post("/scanner/study-values", asyncHandler(ctrl.upsertStudyValues));
+
   return router;
 }

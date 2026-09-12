@@ -274,6 +274,42 @@ export interface ScannerResult {
 }
 
 /**
+ * Provider-agnostic value emitted by an external chart/study system.
+ * Sierra Chart custom studies, CQG studies, or an internal research engine can
+ * all populate this shape without changing downstream scanner condition logic.
+ */
+export interface StudyValue {
+  /** Stable study identifier, such as vwap-reclaim-study or opening-drive. */
+  studyId: string;
+  /** Human-readable study name for diagnostics and condition builders. */
+  studyName?: string;
+  /** Stable subgraph/output identifier within the study, such as SG1 or signal. */
+  field: string;
+  /** Latest normalized numeric, boolean, or text value emitted by the study. */
+  value: number | boolean | string;
+  /** Optional provider-native source label for traceability. */
+  source?: string;
+  /** Provider event timestamp, expressed as an ISO-8601 string when available. */
+  providerTimestamp?: string;
+  /** Application receive timestamp, expressed as an ISO-8601 string. */
+  receivedAt: string;
+}
+
+/**
+ * Latest normalized external study state for one instrument.
+ * This deliberately stores study outputs only; calculation and transport remain
+ * in provider adapters or scanner modules.
+ */
+export interface StudyValueSnapshot {
+  /** Instrument represented by these study values. */
+  instrument: InstrumentIdentity;
+  /** Study values keyed by study/field pairs for condition evaluation. */
+  values: StudyValue[];
+  /** Application receive timestamp, expressed as an ISO-8601 string. */
+  receivedAt: string;
+}
+
+/**
  * Normalized connection state for any market data provider.
  * This is intentionally not tied to Sierra so the same contract can describe
  * DTC, CQG, Rithmic, IBKR, replay, or a mock provider.
