@@ -1,6 +1,5 @@
-import { initialMarkets } from "../mock/initialMarkets";
 import { Logger } from "../logging";
-import { marketDataToBaseline, ScannerEngine } from "../scanner";
+import { ScannerEngine } from "../scanner";
 import { MarketCacheService } from "../services/MarketCacheService";
 import { ConnectionStatus, MarketSnapshot } from "../types/domain";
 import { MarketData, SierraConfig, SierraSyncRequest } from "../types/market";
@@ -44,8 +43,9 @@ export class SierraMarketProviderAdapter implements MarketProvider {
       customSymbols: [],
     };
 
-    this.marketCache.seed(initialMarkets);
-    this.scannerEngine.seedBaselines(initialMarkets.map(marketDataToBaseline));
+    // Sierra mode starts EMPTY: no mock seeding. A symbol appears in the
+    // cache only after genuine DTC data reaches the scanner engine.
+    // NO DATA must never look like a plausible market.
   }
 
   start(): void {
@@ -139,20 +139,10 @@ export class SierraMarketProviderAdapter implements MarketProvider {
     const symbolUpper = symbol.toUpperCase().trim();
     if (!symbolUpper) return;
 
-    if (!this.marketCache.has(symbolUpper)) {
-      const basePrice = symbolUpper.includes("USD") ? 1.25 : 100;
-      const seedSnapshot: MarketSnapshot = {
-        instrument: { symbol: symbolUpper, assetClass: "UNKNOWN" },
-        lastPrice: basePrice,
-        open: basePrice,
-        high: basePrice,
-        low: basePrice,
-        previousClose: basePrice,
-        receivedAt: new Date().toISOString(),
-      };
-      this.scannerEngine.onMarketSnapshot(seedSnapshot);
-    }
-
+    // No synthetic seed snapshot: subscribing only registers DTC interest.
+    // The symbol becomes visible once real data arrives from the feed.
+    // Fabricating basePrice/open/high/low here would present NO DATA
+    // as a tradeable market.
     this.dtcProvider.subscribeMarketData({ symbol: symbolUpper });
   }
 }

@@ -39,9 +39,9 @@ export function mapScannerResultToMarketData(
   const pctChange =
     snapshot.percentChange ?? (prevClose !== 0 ? (netChange / prevClose) * 100 : 0);
 
-  const poc = metrics.pointOfControl ?? lastPrice;
-  const vah = metrics.valueAreaHigh ?? poc;
-  const val = metrics.valueAreaLow ?? poc;
+  const poc = metrics.pointOfControl ?? null;
+  const vah = metrics.valueAreaHigh ?? null;
+  const val = metrics.valueAreaLow ?? null;
 
   return {
     symbol,
@@ -54,13 +54,19 @@ export function mapScannerResultToMarketData(
     high: Number(high.toFixed(precision)),
     low: Number(low.toFixed(precision)),
     prevClose: Number(prevClose.toFixed(precision)),
-    rvol: Number((metrics.relativeVolume ?? 1).toFixed(2)),
-    atr: Number((metrics.atr ?? existing?.atr ?? lastPrice * 0.015).toFixed(precision)),
-    adrFilledPct: Math.round(metrics.adrFilledPercent ?? existing?.adrFilledPct ?? 50),
-    vah: Number(vah.toFixed(precision)),
-    val: Number(val.toFixed(precision)),
-    poc: Number(poc.toFixed(precision)),
-    regime: (metrics.regime === "UNKNOWN" ? "RANGE_BOUND" : metrics.regime) ?? existing?.regime ?? "RANGE_BOUND",
+    rvol: metrics.relativeVolume !== undefined
+      ? Number(metrics.relativeVolume.toFixed(2))
+      : (existing?.rvol ?? null),
+    atr: metrics.atr !== undefined
+      ? Number(metrics.atr.toFixed(precision))
+      : (existing?.atr ?? null),
+    adrFilledPct: metrics.adrFilledPercent !== undefined
+      ? Math.round(metrics.adrFilledPercent)
+      : (existing?.adrFilledPct ?? null),
+    vah: vah !== null ? Number(vah.toFixed(precision)) : null,
+    val: val !== null ? Number(val.toFixed(precision)) : null,
+    poc: poc !== null ? Number(poc.toFixed(precision)) : null,
+    regime: metrics.regime ?? existing?.regime ?? "UNKNOWN",
     probScore: score,
     grade,
     rationale,

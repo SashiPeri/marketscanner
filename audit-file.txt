@@ -1,0 +1,133 @@
+# MarketScanner Deep Read-Only Audit — no code modified, no commits
+
+Repo audited: `/home/sashi/workspace/marketscanner` (single-process TS monolith: Express + WS + ScannerEngine + React SPA).
+
+## 1. What "working" means vs what exists
+
+| Requirement | Verdict |
+|---|---|
+| 1. Connect supported real market-data source | MOCK default; REAL path exists but not usable out-of-box. `MARKET_PROVIDER` defaults `mock` (`server/config/env.ts:43,83`, `.env.example`); `testing` forces `mock` (`env.ts:49-68`). Sierra path requires manual `POST /api/sierra-bridge/sync` — `start()` never connects (`SierraMarketProviderAdapter.ts:51-53`). |
+| 2. Select supported futures symbols | STUB/BROKEN. Five un-reconciled symbol sets, none authoritative (`universe-audit.md`). `ScannerConfig.universe` is a dead field (zero consumers); watchlist is a frontend display filter only (`ScannerGrid.tsx:82`); actual subscriptions come only from in-memory `sierraConfig.customSymbols` (lost on restart). |
+| 3. Receive genuine live market data | UNVERIFIED, effectively NO. Binary DTC plumbing exists (`DtcBinaryCodec.ts`, `SierraDtcProvider.ts`), but: blank `Exchange` on every subscribe, no `ES→ESxx-CME` contract mapping, no depth subscribe on first connect, no auto-subscribe of ES/NQ, no wire-capture/log/test proving one real CME print ever arrived. |
+| 4. Scanner calculates required metrics | PARTIAL. Generic metrics REAL (VWAP, delta, ATR, RVol, session volume VA, regime, score). Strategy-required metrics MISSING (weekly VA, TPO, PVA/CVA, OR variants, 15-min/3-min structure). Mock mode additionally broken: `sessionVolume` never set → RVol=0, VWAP uninitialized, VA flat-zero. |
+| 5. Three setups evaluated correctly | NO. A=MISSING, B=PARTIAL (bare 30-min cross only), C=volume-VA REAL but TPO/PVA/CVA MISSING. No strategy docs exist in repo to evaluate against. |
+| 6. Real-time results in UI | PARTIAL. Pipeline ScannerEngine→EventBus→BatchPublisher(50ms)→WS→`useMarketSocket`→`ScannerGrid` is REAL and wired. But grid ignores its own filter/sort (`ScannerGrid.tsx:80-104` computed, `:214` renders raw `markets`), `filteredMarkets` count misleads, no rationale column, `vwap` column shows `poc`, `delta` hard-coded `—`. |
+| 7. Understand why symbol triggered | MISSING. `rationale` is computed (`Scoring.ts:161-187`) but dropped from `MarketData` mapping, grid shows no signals/rationale; detail panel DOM/T&S/profile are `Math.random` simulated (`MarketDetailPanel.tsx:18-64,119-138`), PROFILE tab not even badged SIMULATED. |
+| 8. Operate through data/connectivity problems without stale/fake data | NO — worst area. No per-symbol timestamps/sequence in `MarketData` (`server/types/market.ts:9-62`); `calculatedAt` dropped by mapper; batch `timestamp` is flush time; REST stamps `now()` over stale cache (`MarketDataService.ts:7-13`); health `ready` checks `>=0` (always true); `UNKNOWN→RANGE_BOUND` coercion presents no-data as tradeable; fake-price seeds (100 / 1.25) injected into scanner+cache+AI before any real data. |
+
+Legend: REAL=runs in prod path · MOCK=synthetic · TEST=fixtures/tests only · STUB=interface/placeholder · UNVERIFIED=code exists, never proven with real data.
+
+## 2. Live-path stage audit
+
+| Stage | Status | Evidence |
+|---|---|---|
+| Sierra DTC codec/connection | PARTIAL / UNVERIFIED | Binary DTC REAL code: encoding request, logon (284B), heartbeat, MD request (101), depth (102) (`DtcBinaryCodec.ts:36-80`); handles snapshot/trade/bid-ask/depth (`SierraDtcProvider.ts:181-230,259-398`). But: `start()` doesn't connect; `subscribeSymbol` sends before `connect` (silently dropped by `writeIfConnected:469-472`, self-heals only on later `resubscribeAll`); `MARKET_DATA_REJECT`/`DEPTH_REJECT` only `warn(type)` with no symbol/reason (`:222-224`); session truth messages (HIGH/LOW/VOLUME/SETTLEMENT/OPEN 113/114/115/119/120, FEED_STATUS 100) defined but `default: break` dropped; doc shows incompatible JSON-over-TCP (`SIERRA_ARCHITECTURE.md:225-255`). Zero socket-level tests, zero wire captures. |
+| Provider (`SierraMarketProviderAdapter`) | PARTIAL | Forwards snapshot/trade/book to engine (`:108-119`) — REAL wiring. But seeds `initialMarkets` mock into cache+baselines in Sierra mode (`:47-48`); fabricates `basePrice 100/1.25, assetClass UNKNOWN` snapshot into scanner on any unknown symbol (`:138-157`); never subscribes depth initially; overwrites DTC port with UI `localPort`; collapses CONNECTING/RECONNECTING→STANDBY, ERROR→DISCONNECTED (`:132-136`). |
+| Normalization/cache | PARTIAL, WS/REST diverge | `MarketCacheService` (with `existing` fallbacks) vs `RealtimeHub` (without) use different mapper inputs (`MarketCacheService.ts:17-23` vs `RealtimeHub.ts:48-53`) → WS can overwrite correct REST rows; classifier `BTC/ETH→CRYPTO, 6-char USD→FOREX else FUTURES` (`mapScannerResult.ts:4-14`) mislabels e.g. AAPL→FUTURES; `UNKNOWN→RANGE_BOUND` coercion (`:63`); fallbacks `atr=price*0.015`, `vah/val=±0.5%` synthetic (`:58`, `mapMarketSnapshot.ts:27-43`). |
+| Scanner calculations | REAL generic / MISSING strategic | VWAP/Delta/ATR/RVol/VolumeProfile/Regime/Scoring REAL (hardened per `QUANT_AUDIT.md`). Gaps: trade-only flow never advances OR (`EventPipeline.ts:78-102`); quote-only ticks re-run full score with `lastPrice=bid` or `0` (`SierraDtcProvider.ts:328-356`); one DTC print → two `finalize()` (trade + derived snapshot); no dedup (`sequence/tradeId` defined, never checked); `sessionOpen/sessionStartMs` latched from first snapshot, never reset; no session rollover. |
+| Condition evaluation | REAL but generic | `finalize: detectRegime→generateSignals→computeScore` (`EventPipeline.ts:138-143`). Signals: vwap-reclaim/rejection, bare OR cross, delta divergence, ADR exhaustion, low-rvol, vol-breakout (`Signals.ts:21-143`). IDs monotonic, not content-stable (dedup impossible). `confidence` heuristic, dropped from `MarketData`. Frontend grade thresholds (85/65) differ from backend (90/80/65/50). |
+| ScannerEngine | REAL, no eviction | `results: Map` + lazy `resolveState` (`ScannerEngine.ts:15,124-132`); `getSymbolCount` counts states not results (`:97-99`); dead symbols stay forever; every tick emits even if unchanged. |
+| WebSocket/events | REAL with bugs | EventBus sync + error swallow (`EventBus.ts:16-30`); BatchPublisher 50ms coalesce-last (`BatchPublisher.ts:39-45`); `SubscriptionManager` keyed by object identity (dupes), `channel` subscriptions receive nothing (`RealtimeHub.ts:124-133` checks only `matchesSymbol`); every socket force-subscribed `all` (`RealtimeServer.ts:76-77`) masking filter bugs; queue 8 drop-oldest with no gap signal; `heartbeatIntervalMs` never used; prune logic kills healthy filtered sockets, never kills stale subscribed ones. |
+| Frontend (`ScannerGrid`, hooks) | PARTIAL, misleading | `useMarketSocket`: `all` subscribe, 50ms client batch, exp-backoff 5 tries then 3s REST poll wholesale-overwrite (no backfill/gap detect, ignores WS `sequence`/`timestamp`) (`useMarketSocket.tsx:61-68,94-105,175-179`). `App.tsx:13` receives `connectionStatus` but never renders it; `TerminalHeader` shows only Sierra dot. Filters/sort computed but rows render unfiltered; `vwap`=poc, `delta`=—, forex decimals wrong; detail panel simulated data adjacent to real numbers. |
+
+## 3. Sierra verdict (critical)
+
+- Interface actually used: DTC binary TCP to a locally-run Sierra Chart DTC server (`127.0.0.1:11099` default). Items 2/3 in the panel (`HTTP_SERVER`, `FILE_SYNC`) are STUB — UI options with no backend implementation; backend always speaks DTC regardless of `connectionType`.
+- Is DTC capable of CME data? YES — protocol is not the blocker. DTC is Sierra's native real-time + historical-tick protocol; `docs/SIERRA_INTEGRATION.md` correctly identifies it as primary for live tape with Historical Price Data as secondary. No evidence of relying on a Sierra-restricted capability.
+- But the current implementation cannot deliver CME data: (a) blank `Exchange[16]` on every `MARKET_DATA_REQUEST` (adapter never populates `subscription.exchange` or `dtcConfig.exchange`); real Sierra needs `ESZ25-CME`-style symbol + `CME` exchange — expect `103/121 REJECT`, which are swallowed. (b) No contract/expiry mapping (`"ES"` sent verbatim). (c) No auto-connect/subscribe — ES/NQ never requested without manual sync. (d) Depth never subscribed on first connect (only on reconnect). (e) No CME entitlement check; user must run Sierra Chart locally with DTC enabled + paid CME feed — heavy but viable single-trader path, undocumented in-app (panel help mentions port 8080, contradicting 11099 default).
+- Does it ever receive a genuine ES/NQ update? No evidence anywhere: no logs, dumps, or tests; `ES/NQ` appear only as mock seeds, test symbols, or `App.tsx:32` default selection. `codec.test.ts` uses synthetic `Buffer.alloc`; `providerAdapter.test.ts` tests baseline mapping only.
+- Can the architecture support it without bloat? Yes. Provider-agnostic `MarketSnapshot/TradePrint/OrderBookSnapshot` contract is sound; fix is small: populate exchange + symbol translation + auto-connect/subscribe + surface rejects + kill fake seeds. No Redis/ACSIL/DLL needed this week.
+- BLOCKER formulation: not "DTC is unsupported" — DTC is the right path. The blocker is "current DTC subscriber cannot route CME subscriptions (blank exchange, no contract mapping) and has never proven one real print, so the live path is BLOCKED until those two are fixed and validated against a real Sierra instance."
+
+## 4. Three strategies (source-of-truth problem first)
+
+There are no strategy spec docs in the repo for any of the three setups. Grep for `WDVAH|WDVAL|weekly|developing|TPO|PVAH|PVAL|CVA|premarket|previous day|15-min|3-min|market structure|composite` → zero hits in scanner code (only `"opening range high/low"` rationale strings, `SessionMetrics` OR helpers, `Regime BREAKOUT` comment, and a 15-min RVol-curve bucket comment). `~/workspace/trading-strategy/` is empty.
+
+- A. Weekly Developing Value Area Traversal: MISSING. No weekly aggregation, no developing POC/VA, no WDVAH/WDVAL fields (`SymbolState.ts:43-51` single-session only; `SymbolBaseline`/`BaselineRecord` have ADR/ADV/ATR/prevClose only); single cumulative intraday histogram, no day/week key, no rollover (`VolumeProfile.ts:15-44`); no traversal/continuation/acceptance signals (`Signals.ts` has none); no 15-min structure, no cumulative-delta-acceptance, no developing-VWAP context, no 3-min trigger anywhere. Not wrong — absent.
+- B. Opening Range: PARTIAL. Implemented: hard-coded 30-min window (`constants.ts:12`), latch + `UP/DOWN/FLAT` drive (`SessionMetrics.ts:38-74`), bare `price>ORH / <ORL` breakout signals (`Signals.ts:58-84`, `SessionMetrics.ts:77-92`). Missing/wrong vs any institutional OR spec: single 30-min only (no 5/15/60 variant, no config); anchored to first-snapshot time, not 9:30 ET RTH (late/premarket/24h shifts window; no timezone/RTH/ETH/premarket split); no previous-day/premarket-high-low/gap context (`previousClose` stored, unused in OR); bare cross with no retest/hold/fail, no width/extension target, no RVol/Delta/ATR confirmation, fires indefinitely after latch; trade-only flow never advances OR (`EventPipeline.ts:78-102`); zero OR tests.
+- C. Market Profile TPO PVA/CVA: PARTIAL-as-volume-VA, MISSING-as-strategy. REAL: session volume POC/VAH/VAL 70% CBOT expansion with tie-expand-both (`VolumeProfile.ts:52-121`, tested). MISSING: TPO/time-brackets/letters (volume-only histogram); PVAH/PVAL/CVA/prior POC (grep empty; single `vah/val/poc`); value-area history persistence (baselines carry ADR/ATR/ADV only; `averageOpeningRange=adr*0.25` synthetic); ±3-tick treatment; 3-min trigger; premarket handling. Do not present current `vah/val` as TPO levels.
+
+## 5. Scanner-itself highlights (incorrect-signal risks)
+
+Mock-mode numeric collapse (RVol→0, VWAP neutral-50, VAH=VAL=POC=0 kept via `??` in mapper → frontend divides by `(vah-val||1)` and pins markers); WS/REST mapper divergence; quote-flicker re-scoring; double-count per DTC trade (also double-persisted); `UNKNOWN→RANGE_BOUND` false certainty; grid filter/sort illusion; SIMULATED DOM/T&S/profile next to real numbers; error/WS states invisible to user; reconnect poll overwrites newer WS rows; entitlement (`FREE=10/PAID=200`) gates only `watchlist.json` writes, never DTC subscriptions/cache/engine — unbounded free use + zombie seeds that feed `runAiAnalysis` (`App.tsx:87`).
+
+---
+
+### CURRENT STATE
+
+A well-structured single-process scanner with real generic math and a real Engine→WS→UI pipeline, but its only working data source is a 3-second mock random-walk; the Sierra DTC live path has correct binary plumbing yet has never demonstrably delivered one real CME print (blank exchange, no contract mapping, manual-connect-only, fake-price seeding), the symbol universe/watchlist/entitlement layers are mutually disconnected, the three saleable setups are respectively missing/partial/missing with no in-repo spec, and the UI can silently present stale, simulated, or fabricated numbers as live — so no futures trader can use it with real money today.
+
+### END-TO-END STATUS
+
+`Sierra → Data → Provider → Scanner → Signals → WebSocket → UI`
+
+`Sierra(BLOCKED: blank exchange + no contract map + manual-connect-only + rejects swallowed, UNVERIFIED: zero real prints) → Data(MOCK default; REAL path UNVERIFIED) → Provider(PARTIAL: forwarding REAL, seeding fake REAL-polluting) → Scanner(PARTIAL: generic metrics REAL, strategic metrics MISSING, mock-mode numbers BROKEN) → Signals(PARTIAL: generic signals REAL, 3 setups MISSING/PARTIAL) → WebSocket(REAL transport, PARTIAL: channel/filter/prune/sequence bugs) → UI(PARTIAL: grid REAL but filter/sort/rationale BROKEN, detail SIMULATED/MOCK)`
+
+### THREE STRATEGIES
+
+| Strategy | Status | Main Gap |
+|---|---|---|
+| A. Weekly Developing Value Area Traversal | MISSING | No weekly/developing VA, acceptance, 15-min structure, delta, developing VWAP, or 3-min trigger exists anywhere |
+| B. Opening Range | PARTIAL | Only bare 30-min price-cross; no RTH anchor, no variants, no retest/confirmation, no prior-day/premarket context, trade flow freezes OR |
+| C. Market Profile TPO PVA/CVA | PARTIAL (volume VA only) | Volume POC/VAH/VAL real; TPO brackets, PVAH/PVAL, composite, ±3-tick, 3-min trigger, premarket all missing |
+
+### BLOCKERS
+
+1. CME-routed DTC subscription + one proven real ES print (populate `Exchange=CME`, contract-symbol mapping e.g. ES→ESZ25-CME, auto-connect+subscribe on boot when `MARKET_PROVIDER=sierra`, surface 103/121 rejects with symbol+reason; validate against real Sierra with CME entitlement — until then nothing downstream is "working").
+2. Kill fake-data injection (remove `basePrice 100/1.25` seed snapshots in `SierraMarketProviderAdapter.subscribeSymbol`, remove `initialMarkets` seeding in Sierra mode, remove synthetic `atr/vah/val` fallbacks from mappers) — a trader must never see fabricated prices as live.
+3. Single authoritative symbol universe (one resolver over watchlist ∪ custom symbols, persisted, entitlement-capped, validated before subscribe; unknown DTC symbols quarantined, never fabricated) — without this, symbol selection is incoherent and entitlement unenforceable.
+4. Per-symbol freshness truth (carry `lastUpdate/calculatedAt/sequence` end-to-end, show STALE/DISCONNECTED distinctly in UI, stop stamping `now()` over stale cache, fix `UNKNOWN→RANGE_BOUND` coercion) — without this every connectivity blip becomes a silent wrong signal.
+5. Minimum viable OR correctness for sale (RTH-anchored 9:30 ET window + prior-day/premarket context + retest/hold semantics + trade-flow advancing OR) OR formally cut OR to "beta/basic-breakout" label — cannot sell current bare-cross as the documented setup.
+6. Decide A and C scope: either implement minimum weekly-VA + TPO/PVA primitives or explicitly cut them from the MVP sale (cannot sell what is MISSING).
+
+### MUST-HAVES
+
+1. Auto-connect + auto-subscribe default futures list (ES,NQ at minimum) when `MARKET_PROVIDER=sierra`; persist custom symbols across restart.
+2. Depth subscribe on first connect (not only on reconnect); handle session-truth messages (HIGH/LOW/VOLUME/SETTLEMENT/OPEN) or document drift.
+3. Fix WS/REST mapper divergence (single mapping function, shared `existing` fallback, correct asset-class/category, no synthetic numbers).
+4. Fix grid truthfulness: render `filteredMarkets`, wire sort, show rationale/signals, fix `vwap`=poc mislabel, `delta` column, forex decimals, flat-VA guard; badge ALL simulated panels.
+5. Visible connection/data states: WS status + Sierra DTC status + per-symbol STALE in header/grid; client handles server `error` frames; no silent REST-overwrite of newer WS rows.
+6. Entitlement enforced at subscription union (DTC + cache + engine), not just watchlist file writes.
+7. One E2E proof runbook: boot → connect → ES tick → metric → signal → WS → grid, recorded against real Sierra (or documented replay), runnable by a trader without dev help.
+
+### SHOULD-HAVES
+
+1. OR variants/config (5/15/30/60-min), width/extension targets, RVol/Delta confirmation gates, time-expiry of breakout validity.
+2. Weekly developing VA accumulator + prior-day VA persistence (enables A and C properly).
+3. TPO bracket counting + PVA/CVA + ±3-tick rule + 3-min structure trigger.
+4. Dedup via `sequence/tradeId`, dirty-check to stop emitting unchanged results, content-stable signal IDs.
+5. Reject/stall alerting, queue-depth/reconnect-attempt exposure in `/health` + `/metrics`, backfill/gap detection on WS resume.
+6. Session rollover/reset, DST handling, ETH/RTH split, futures tick-size/contract metadata table.
+7. E2E + DTC codec tests (handshake/logon/heartbeat/reconnect/framing/depth-delete) with captured fixtures.
+
+### LATER
+
+1. Billing, social, mobile, AI chat, automated trading, broker execution.
+2. Backtesting, replay control, ACSIL bridge DLL, TAL import, fill↔scanner correlation (interfaces already stubbed under `server/sierra-integration/` — leave alone).
+3. PostgreSQL/Redis, Prometheus exposition, log shipping, horizontal scaling, auth/rate-limiting (all listed as future in `PRODUCTION_DEPLOYMENT.md`).
+4. Dozens of strategies, advanced analytics, SaaS multi-tenancy, 500-ticker virtualization, binary WS compression, Web Workers.
+5. HTTP_SERVER/FILE_SYNC backends, spreadsheet/Python bridges, Gemini prompt work, UI redesigns, opportunistic refactors, dependency upgrades.
+
+### AGENT WORK SPLIT
+
+- OPENCode — LEAD: owns all integration: DTC exchange/symbol fix, fake-seed removal, UniverseService, freshness plumbing, OR/RTH fix, mapper unification, grid truthfulness, E2E proof. Sole writer to `server/providers/sierra/*`, `SierraMarketProviderAdapter.ts`, `EventPipeline.ts`, `mapScannerResult.ts`, `ScannerGrid.tsx`, `useMarketSocket.tsx`. No parallel edits to these files.
+- CLAUDE — REVIEW: independent reasoning only, no big coding: (a) verify DTC CME routing plan against Sierra DTC spec (exchange field, contract symbol format, Historical Price Data request shape); (b) review strategy-scope decision (which of A/B/C ships in MVP and exact acceptance criteria); (c) review freshness/state-machine design (STALE/DISCONNECTED transitions). Comment-only output.
+- OPENHANDS — TEST/VERIFY: independent testing/isolated fixes: (a) write DTC codec + provider unit tests from captured fixtures (no core-file refactors); (b) write scanner math regression tests for any changed OR/VA logic (new test files only); (c) execute the E2E proof runbook against mock + (when available) real Sierra and report raw evidence. No changes to core engine/provider files without lead approval.
+- OTHER AGENT — ONLY IF NECESSARY: none this week. If a Sierra-account holder is available, use them purely as a live-feed operator (run Sierra, provide DTC capture), not as a code agent.
+
+### SMALLEST PATH TO SALEABLE MVP
+
+1. Fix DTC CME routing (exchange + contract map) and prove one real ES print end-to-end (print → engine → WS → grid); keep everything else frozen.
+2. Remove all fake-price/synthetic seeding and `initialMarkets` pollution in Sierra mode so "no data" reads as no data.
+3. Ship single UniverseService: one persisted, entitlement-capped futures list driving both subscribe and display; auto-subscribe ES/NQ on boot.
+4. Ship freshness truth: timestamps/sequence end-to-end + STALE/DISCONNECTED UI + honest health/ready.
+5. Scope strategies honestly: ship RTH-anchored OR with retest semantics as the one documented setup; mark Weekly-VA and TPO/PVA as "coming soon," or implement only their minimal primitives if time allows.
+6. Fix grid honesty (render filtered/sorted rows, real vwap/delta, rationale, SIMULATED badges) and write the one-page trader runbook; do one clean boot-to-signal demo with a real trader present.
+
+### DO NOT BUILD
+
+- Billing, auth systems, SaaS tenancy, mobile app, social, AI chat/analysis upgrades, auto-trading, broker execution.
+- ACSIL DLL, C++ studies, Redis, Postgres/TimescaleDB, Prometheus, Datadog/CloudWatch shipping, horizontal scaling.
+- Backtesting, replay driving, TAL parsing, fill correlation, historical backfill UI, advanced analytics.
+- New strategies beyond the three, strategy optimizer, 500-symbol virtualization, msgpack/binary WS, Web Workers.
+- HTTP_SERVER/FILE_SYNC backends, spreadsheet/Python bridges, Gemini prompt work, UI redesigns, opportunistic refactors, dependency upgrades.

@@ -166,7 +166,13 @@ export class SierraDtcProvider extends EventEmitter {
 
     for (const message of messages) {
       this.lastMessageAt = nowIso();
-      this.handleMessage(message);
+      try {
+        this.handleMessage(message);
+      } catch (error: any) {
+        // A malformed message must never kill the socket loop.
+        this.lastError = error?.message ?? "DTC message handling failed";
+        this.emit("error", error instanceof Error ? error : new Error(this.lastError));
+      }
     }
 
     this.emitStatus();

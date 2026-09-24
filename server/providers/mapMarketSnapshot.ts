@@ -24,21 +24,23 @@ function mapAssetClassToCategory(
   return "FUTURES";
 }
 
-function createDefaultScannerFields(price: number): Pick<
+function createDefaultScannerFields(): Pick<
   MarketData,
   "rvol" | "atr" | "adrFilledPct" | "vah" | "val" | "poc" | "regime" | "probScore" | "grade" | "rationale"
 > {
+  // No synthetic metrics: a bare snapshot carries prices only.
+  // Scanner fields stay null until the engine computes them.
   return {
-    rvol: 1.0,
-    atr: Number((price * 0.015).toFixed(2)),
-    adrFilledPct: 50,
-    vah: Number((price * 1.005).toFixed(2)),
-    val: Number((price * 0.995).toFixed(2)),
-    poc: price,
-    regime: "RANGE_BOUND",
+    rvol: null,
+    atr: null,
+    adrFilledPct: null,
+    vah: null,
+    val: null,
+    poc: null,
+    regime: "UNKNOWN",
     probScore: 50,
     grade: "C",
-    rationale: "Live Sierra DTC feed connected. Scanner metrics pending Phase 3 engine.",
+    rationale: "Awaiting scanner metrics.",
   };
 }
 
@@ -52,7 +54,7 @@ export function mapSnapshotToMarketData(snapshot: MarketSnapshot, existing?: Mar
   const netChange = snapshot.netChange ?? lastPrice - prevClose;
   const pctChange = snapshot.percentChange ?? (prevClose !== 0 ? (netChange / prevClose) * 100 : 0);
   const precision = mapAssetClassToCategory(snapshot.instrument.assetClass, symbol) === "FOREX" ? 4 : 2;
-  const scannerDefaults = existing ?? createDefaultScannerFields(lastPrice);
+  const scannerDefaults = existing ?? createDefaultScannerFields();
 
   return {
     symbol,

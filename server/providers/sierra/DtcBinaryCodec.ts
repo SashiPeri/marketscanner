@@ -113,6 +113,10 @@ export class DtcBinaryCodec {
 
   parseMarketSnapshot(message: ParsedDtcMessage): ParsedMarketSnapshot {
     const body = message.body;
+    const symbolId = body.length >= 8 ? body.readUInt32LE(4) : 0;
+    // s_MarketDataSnapshot shorter than the DateTime field cannot carry
+    // quotes; return the id only rather than over-reading the buffer.
+    if (body.length < 104) return { symbolId };
     const previousClose = finitePrice(body.readDoubleLE(8));
     const open = finitePrice(body.readDoubleLE(16));
     const high = finitePrice(body.readDoubleLE(24));
@@ -120,12 +124,14 @@ export class DtcBinaryCodec {
     const sessionVolume = finitePrice(body.readDoubleLE(40));
     const bidPrice = finitePrice(body.readDoubleLE(56));
     const askPrice = finitePrice(body.readDoubleLE(64));
-    const askSize = finitePrice(body.readDoubleLE(72));
-    const bidSize = finitePrice(body.readDoubleLE(80));
-    const lastPrice = finitePrice(body.readDoubleLE(88));
+    // Quantities are int32 (AskQuantity @72, BidQuantity @76); LastTradePrice
+    // is the double @80 and the snapshot DateTime double @96.
+    const askSize = finitePrice(body.readInt32LE(72));
+    const bidSize = finitePrice(body.readInt32LE(76));
+    const lastPrice = finitePrice(body.readDoubleLE(80));
 
     return {
-      symbolId: body.readUInt32LE(4),
+      symbolId,
       lastPrice,
       bidPrice,
       askPrice,
@@ -136,7 +142,7 @@ export class DtcBinaryCodec {
       low,
       previousClose,
       sessionVolume,
-      providerTimestamp: dtcDateTimeToIso(body.readDoubleLE(104)) || dtcDateTimeToIso(body.readDoubleLE(112)),
+      providerTimestamp: dtcDateTimeToIso(body.readDoubleLE(96)),
     };
   }
 

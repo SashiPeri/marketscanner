@@ -17,13 +17,15 @@ export interface MarketData {
   high: number;
   low: number;
   prevClose: number;
-  rvol: number;
-  atr: number;
-  adrFilledPct: number;
-  vah: number;
-  val: number;
-  poc: number;
-  regime: "TRENDING_UP" | "TRENDING_DOWN" | "RANGE_BOUND" | "CHOPPY";
+  // Derived scanner metrics: null means UNAVAILABLE (no data yet), never
+  // a synthetic placeholder. The UI must render null honestly.
+  rvol: number | null;
+  atr: number | null;
+  adrFilledPct: number | null;
+  vah: number | null;
+  val: number | null;
+  poc: number | null;
+  regime: "TRENDING_UP" | "TRENDING_DOWN" | "RANGE_BOUND" | "CHOPPY" | "UNKNOWN";
   probScore: number;
   grade: "A+" | "A" | "B" | "C" | "F";
   rationale: string;
