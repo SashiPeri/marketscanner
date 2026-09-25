@@ -86,6 +86,14 @@ describe("DtcBinaryCodec", () => {
       .toBeUndefined();
   });
 
+  it("lists live-observed message types (open interest, feed status)", () => {
+    // Seen live 2026-09-25 vs SC Build 56603: 135 streams on EURUSD,
+    // 100/116 accompany empty/symbol-status episodes.
+    expect(DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_OPEN_INTEREST).toBe(135);
+    expect(DTC_MESSAGE_TYPES.MARKET_DATA_FEED_STATUS).toBe(100);
+    expect(DTC_MESSAGE_TYPES.MARKET_DATA_FEED_SYMBOL_STATUS).toBe(116);
+  });
+
   it("datetime helpers never throw on corrupt wire values", () => {
     for (const bad of [NaN, Infinity, -Infinity, 1e308, -5, 0]) {
       expect(dtcDateTimeToIso(bad)).toBeUndefined();

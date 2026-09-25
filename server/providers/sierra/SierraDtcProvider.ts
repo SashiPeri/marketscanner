@@ -238,6 +238,21 @@ export class SierraDtcProvider extends EventEmitter {
         this.handleSessionUpdate(this.codec.parseSessionUpdate(message));
         break;
 
+      case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_OPEN_INTEREST:
+        // Open interest carries no price/volume truth for the scanner.
+        // Ignored deliberately (seen live on forex symbols, e.g. EURUSD).
+        break;
+
+      case DTC_MESSAGE_TYPES.MARKET_DATA_FEED_STATUS:
+      case DTC_MESSAGE_TYPES.MARKET_DATA_FEED_SYMBOL_STATUS: {
+        // Feed/symbol status explains WHY snapshots are empty (no chart
+        // open, feed disconnected, exchange-restricted symbol). Surface at
+        // debug so empty-data diagnosis doesn't require a raw socket probe.
+        const body = message.body.length > 4 ? message.body.subarray(4).toString("hex") : "";
+        logger.debug(`[SierraDTC] feed status type=${message.type} payload=${body}`);
+        break;
+      }
+
       default:
         break;
     }
