@@ -61,10 +61,13 @@ export class HealthService {
   }
 
   getReady(): { ready: boolean; checks: Record<string, boolean>; timestamp: string } {
+    // Readiness = the pipeline has actually carried data. An empty bus or
+    // cache means nothing is wired/flowing yet, so we report not-ready
+    // instead of presenting a data-less server as tradeable.
     const checks = {
       scanner: this.deps.scannerEngine.isRunning(),
-      eventBus: this.deps.eventBus.channels().length >= 0,
-      cache: this.deps.marketCache.size() >= 0,
+      eventBus: this.deps.eventBus.channels().length > 0,
+      cache: this.deps.marketCache.size() > 0,
       websocket: this.deps.websocketAttached(),
     };
 
