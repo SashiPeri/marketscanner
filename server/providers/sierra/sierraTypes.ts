@@ -102,3 +102,35 @@ export interface ParsedDepthLevel {
   isFinalUpdate?: boolean;
   providerTimestamp?: string;
 }
+
+/**
+ * Sierra's own answer for a symbol string (DTC 507). `known` is true only
+ * when Sierra echoes a non-empty description with a nonzero security type —
+ * e.g. bare "ESZ26" comes back empty/0 (unknown) while "ESZ26-CME" comes
+ * back as a future with "E-MINI S&P 500 ...". No product names live here;
+ * every value comes off the wire.
+ */
+export interface SierraSecurityDefinition {
+  symbol: string;
+  exchange: string;
+  securityType: number;
+  description: string;
+  known: boolean;
+}
+
+export interface ParsedSecurityDefinition {
+  requestId: number;
+  symbol: string;
+  exchange: string;
+  securityType: number;
+  description: string;
+}
+
+/** Per-symbol feed truth surfaced to the UI — never a silent empty grid. */
+export type SymbolFeedStatus = "PENDING" | "STREAMING" | "REJECTED" | "UNKNOWN_SYMBOL";
+
+export interface SymbolFeedState {
+  status: SymbolFeedStatus;
+  /** Sierra's own words: reject text, secdef description, etc. */
+  detail?: string;
+}

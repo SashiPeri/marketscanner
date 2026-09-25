@@ -17,6 +17,7 @@ import {
   ParsedDtcReject,
   ParsedLogonResponse,
   ParsedMarketSnapshot,
+  ParsedSecurityDefinition,
   ParsedSessionUpdate,
   ParsedTradeUpdate,
   SessionTruthField,
@@ -88,6 +89,39 @@ export class DtcBinaryCodec {
     writeFixedAscii(buffer, 12, 64, symbol);
     writeFixedAscii(buffer, 76, 16, exchange);
     buffer.writeInt32LE(depthLevels, 92);
+    return buffer;
+  }
+
+  /**
+   * s_SecurityDefinitionForSymbolRequest (506): Size+Type+RequestID@4 +
+   * Symbol[64]@8 + Exchange[16]@72 + SecurityType@88(=0 wildcard).
+   * Sierra answers with SECURITY_DEFINITION_RESPONSE (507) echoing the
+   * RequestID. Empty exchange: Sierra ignores it and matches the exact
+   * symbol string from File >> Find Symbol.
+   */
+  encodeSecurityDefinitionRequest(requestId: number, symbol: string): Buffer {
+    const buffer = Buffer.alloc(DTC_STRUCT_SIZES.SECURITY_DEFINITION_REQUEST);
+    buffer.writeUInt16LE(DTC_STRUCT_SIZES.SECURITY_DEFINITION_REQUEST, 0);
+    buffer.writeUInt16LE(DTC_MESSAGE_TYPES.SECURITY_DEFINITION_FOR_SYMBOL_REQUEST, 2);
+    buffer.writeInt32LE(requestId, 4);
+    writeFixedAscii(buffer, 8, 64, symbol);
+    writeFixedAscii(buffer, 72, 16, undefined);
+    buffer.writeInt32LE(0, 88);
+    return buffer;
+  }
+
+  /**
+   * s_SymbolsForExchangeRequest (502) with blank exchange + wildcard type:
+   * Sierra returns one SECURITY_DEFINITION_RESPONSE per known symbol of
+   * the current data service. The generic "what can I trade?" primitive.
+   */
+  encodeSymbolsForExchangeRequest(requestId: number): Buffer {
+    const buffer = Buffer.alloc(DTC_STRUCT_SIZES.SYMBOLS_FOR_EXCHANGE_REQUEST);
+    buffer.writeUInt16LE(DTC_STRUCT_SIZES.SYMBOLS_FOR_EXCHANGE_REQUEST, 0);
+    buffer.writeUInt16LE(DTC_MESSAGE_TYPES.SYMBOLS_FOR_EXCHANGE_REQUEST, 2);
+    buffer.writeInt32LE(requestId, 4);
+    writeFixedAscii(buffer, 8, 16, undefined);
+    buffer.writeInt32LE(0, 24);
     return buffer;
   }
 
@@ -347,6 +381,22 @@ export class DtcBinaryCodec {
     };
   }
 
+  /**
+   * s_SecurityDefinitionResponse (507) stable prefix: RequestID@4,
+   * Symbol[64]@8, Exchange[16]@72, SecurityType@88, Description@92.
+   * Newer servers append fields (432-byte bodies observed live) — only the
+   * prefix is read so parsing never overruns short bodies.
+   */
+  parseSecurityDefinitionResponse(message: ParsedDtcMessage): ParsedSecurityDefinition {
+    const body = message.body;
+    return {
+      requestId: body.length >= 8 ? body.readInt32LE(4) : 0,
+      symbol: body.length > 8 ? readFixedAscii(body, 8, Math.min(64, body.length - 8)) : "",
+      exchange: body.length > 72 ? readFixedAscii(body, 72, Math.min(16, body.length - 72)) : "",
+      securityType: body.length >= 92 ? body.readInt32LE(88) : 0,
+      description: body.length > 92 ? readFixedAscii(body, 92, Math.min(48, body.length - 92)) : "",
+    };
+  }
   /**
    * Sierra-computed session truth (the "import, don't reimplement" path):
    * 113 volume, 114 high, 115 low, 119 settlement, 120 open.

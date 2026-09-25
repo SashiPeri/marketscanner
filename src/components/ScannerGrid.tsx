@@ -208,7 +208,7 @@ export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }:
                 value={newSymbolInput}
                 onChange={(e) => setNewSymbolInput(e.target.value.toUpperCase())}
                 onKeyDown={(e) => { if (e.key === "Enter") void handleAddSymbol(); }}
-                placeholder="ADD SYMBOL (ESZ25)"
+                placeholder="ADD SYMBOL"
                 className="w-full bg-[#0b0c10] border border-gray-700 rounded pl-7 pr-2 py-1 text-[11px] text-white placeholder-gray-600 outline-none focus:border-orange-500 font-mono"
               />
             </div>

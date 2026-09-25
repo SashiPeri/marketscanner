@@ -105,4 +105,59 @@ describe("SierraDtcProvider zero-data guards", () => {
     expect(() => feed(provider, body)).not.toThrow();
     expect(snaps).toHaveLength(0);
   });
+
+  it("tracks per-symbol feed state: PENDING → STREAMING", () => {
+    const provider = makeProvider();
+    expect(provider.getSymbolFeedStates()["ESZ25"]?.status).toBe("PENDING");
+    feed(provider, snapshotBuffer(1, 5011.0));
+    expect(provider.getSymbolFeedStates()["ESZ25"]?.status).toBe("STREAMING");
+  });
+
+  it("records Sierra reject text per symbol", () => {
+    const provider = makeProvider();
+    const body = Buffer.alloc(80);
+    body.writeUInt16LE(80, 0);
+    body.writeUInt16LE(DTC_MESSAGE_TYPES.MARKET_DATA_REJECT, 2);
+    body.writeUInt32LE(1, 4);
+    body.write("Market data request not allowed", 8, "ascii");
+    feed(provider, body);
+    expect(provider.getSymbolFeedStates()["ESZ25"]).toEqual({
+      status: "REJECTED",
+      detail: "Market data request not allowed",
+    });
+  });
+
+  it("flags unknown symbols from Sierra security definitions", () => {
+    const provider = makeProvider();
+    const body = Buffer.alloc(140);
+    body.writeUInt16LE(140, 0);
+    body.writeUInt16LE(DTC_MESSAGE_TYPES.SECURITY_DEFINITION_RESPONSE, 2);
+    body.writeInt32LE(999, 4);
+    body.write("ESZ25", 8, "ascii");
+    body.writeInt32LE(0, 88);
+    feed(provider, body);
+    expect(provider.getSymbolFeedStates()["ESZ25"]?.status).toBe("UNKNOWN_SYMBOL");
+  });
+
+  it("resolves security definitions through the request/response cycle", async () => {
+    const provider = makeProvider();
+    // Fake a connected socket so the request path writes.
+    (provider as unknown as { state: string }).state = "CONNECTED";
+    (provider as unknown as { socket: object }).socket = { destroyed: false, write: () => true };
+    const pending = provider.requestSecurityDefinition("ESZ26-CME");
+    const body = Buffer.alloc(140);
+    body.writeUInt16LE(140, 0);
+    body.writeUInt16LE(DTC_MESSAGE_TYPES.SECURITY_DEFINITION_RESPONSE, 2);
+    body.writeInt32LE(1, 4);
+    body.write("ESZ26-CME", 8, "ascii");
+    body.writeInt32LE(1, 88);
+    body.write("E-MINI S&P 500 FUTURES", 92, "ascii");
+    feed(provider, body);
+    const definition = await pending;
+    expect(definition.known).toBe(true);
+    expect(definition.description).toBe("E-MINI S&P 500 FUTURES");
+    // Second call serves from cache without a socket.
+    (provider as unknown as { socket: null }).socket = null;
+    await expect(provider.requestSecurityDefinition("ESZ26-CME")).resolves.toEqual(definition);
+  });
 });

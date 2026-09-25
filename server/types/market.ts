@@ -1,9 +1,17 @@
+import { SymbolFeedState } from "../providers/sierra/sierraTypes";
+
 export interface SierraConfig {
   localPort: number;
   connectionType: "HTTP_SERVER" | "DTC_PROTOCOL" | "FILE_SYNC";
   status: "DISCONNECTED" | "CONNECTED" | "STANDBY";
   lastSyncTime: string | null;
   customSymbols: string[];
+  /**
+   * Per-symbol feed truth keyed by symbol (PENDING/STREAMING/REJECTED/
+   * UNKNOWN_SYMBOL with Sierra's own detail text). Absent for non-DTC
+   * providers. The UI renders this instead of guessing.
+   */
+  symbolStates?: Record<string, SymbolFeedState>;
 }
 
 export interface MarketData {

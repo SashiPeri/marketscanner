@@ -21,7 +21,9 @@ import {
   ParsedTradeUpdate,
   SierraDtcConfig,
   SierraProviderEvents,
+  SierraSecurityDefinition,
   SierraSubscription,
+  SymbolFeedState,
 } from "./sierraTypes";
 
 type ConnectionState = ConnectionStatus["state"];
@@ -46,6 +48,14 @@ export class SierraDtcProvider extends EventEmitter {
   private readonly symbolById = new Map<number, string>();
   private readonly snapshotsBySymbol = new Map<string, MarketSnapshot>();
   private readonly orderBooksBySymbol = new Map<string, { bids: OrderBookLevel[]; asks: OrderBookLevel[] }>();
+  private readonly feedStatesBySymbol = new Map<string, SymbolFeedState>();
+  private readonly secdefCache = new Map<string, SierraSecurityDefinition>();
+  private readonly pendingSecdef = new Map<number, {
+    symbol: string;
+    resolve: (def: SierraSecurityDefinition) => void;
+    timer: NodeJS.Timeout;
+  }>();
+  private nextRequestId = 1;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private nextSymbolId = 1;
@@ -105,6 +115,7 @@ export class SierraDtcProvider extends EventEmitter {
 
   subscribeMarketData(subscription: SierraSubscription): void {
     const symbolId = this.registerSubscription(subscription);
+    this.markFeedState(subscription.symbol, { status: "PENDING" });
     this.writeIfConnected(this.codec.encodeMarketDataRequest(
       symbolId,
       subscription.symbol,
@@ -153,6 +164,37 @@ export class SierraDtcProvider extends EventEmitter {
       lastError: this.lastError,
       updatedAt: nowIso(),
     };
+  }
+
+  /**
+   * Ask Sierra what a symbol string actually is (DTC 506 → 507), cached.
+   * Generic across every product Sierra knows — futures, forex, equities,
+   * indices — because every value comes off the wire, never from a list
+   * in this repo. Resolves `known: false` when Sierra echoes an empty
+   * description with security type 0 (e.g. a bare expiry code without the
+   * exchange suffix Sierra requires).
+   */
+  requestSecurityDefinition(symbol: string, timeoutMs = 5000): Promise<SierraSecurityDefinition> {
+    const key = symbol.toUpperCase().trim();
+    const cached = this.secdefCache.get(key);
+    if (cached) return Promise.resolve(cached);
+    if (!this.socket || this.socket.destroyed || this.state !== "CONNECTED") {
+      return Promise.reject(new Error(`DTC not connected — cannot validate ${key}.`));
+    }
+    const requestId = this.nextRequestId++;
+    return new Promise<SierraSecurityDefinition>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSecdef.delete(requestId);
+        reject(new Error(`Security definition timeout for ${key}.`));
+      }, timeoutMs);
+      this.pendingSecdef.set(requestId, { symbol: key, resolve, timer });
+      this.writeIfConnected(this.codec.encodeSecurityDefinitionRequest(requestId, key));
+    });
+  }
+
+  /** Per-symbol feed truth for the UI: no more silent empty grids. */
+  getSymbolFeedStates(): Record<string, SymbolFeedState> {
+    return Object.fromEntries(this.feedStatesBySymbol);
   }
 
   private handleData(data: Buffer): void {
@@ -226,7 +268,23 @@ export class SierraDtcProvider extends EventEmitter {
         const reject = this.codec.parseReject(message);
         const symbol = this.symbolById.get(reject.symbolId) ?? `#${reject.symbolId}`;
         const kind = message.type === DTC_MESSAGE_TYPES.MARKET_DEPTH_REJECT ? "depth" : "data";
-        logger.warn(`[SierraDTC] ${kind} subscription rejected for ${symbol}: ${reject.text || "no reason given"}.`);
+        const text = reject.text || "no reason given";
+        // Sierra's own words, per symbol, surfaced to the UI — e.g.
+        // "Market data request not allowed" for exchange-restricted
+        // products. A reject is terminal for this subscription; the market
+        // data verdict wins over depth because depth is secondary.
+        if (!symbol.startsWith("#")) {
+          const current = this.feedStatesBySymbol.get(symbol);
+          if (current?.status !== "REJECTED" || kind === "data") {
+            this.markFeedState(symbol, { status: "REJECTED", detail: text });
+          }
+        }
+        logger.warn(`[SierraDTC] ${kind} subscription rejected for ${symbol}: ${text}.`);
+        break;
+      }
+
+      case DTC_MESSAGE_TYPES.SECURITY_DEFINITION_RESPONSE: {
+        this.handleSecurityDefinitionResponse(message);
         break;
       }
 
@@ -258,8 +316,7 @@ export class SierraDtcProvider extends EventEmitter {
     }
   }
 
-  private handleLogonResponse(message: ParsedDtcMessage): void {
-    const response = this.codec.parseLogonResponse(message);
+  private handleLogonResponse(message: ParsedDtcMessage): void {    const response = this.codec.parseLogonResponse(message);
 
     if (response.result === DTC_LOGON_STATUS.SUCCESS) {
       this.reconnectAttempts = 0;
@@ -320,6 +377,7 @@ export class SierraDtcProvider extends EventEmitter {
 
     this.snapshotsBySymbol.set(symbol, snapshot);
     this.emit("marketSnapshot", snapshot);
+    this.markStreaming(symbol);
   }
 
   private handleSessionUpdate(parsed: ParsedSessionUpdate | undefined): void {
@@ -388,6 +446,7 @@ export class SierraDtcProvider extends EventEmitter {
 
     this.snapshotsBySymbol.set(symbol, snapshot);
     this.emit("marketSnapshot", snapshot);
+    this.markStreaming(symbol);
   }
 
   private handleBidAskUpdate(parsed: ParsedBidAskUpdate | undefined): void {
@@ -424,6 +483,7 @@ export class SierraDtcProvider extends EventEmitter {
 
     this.snapshotsBySymbol.set(symbol, snapshot);
     this.emit("marketSnapshot", snapshot);
+    this.markStreaming(symbol);
   }
 
   private handleDepthLevel(parsed: ParsedDepthLevel | undefined): void {
@@ -545,6 +605,48 @@ export class SierraDtcProvider extends EventEmitter {
       return;
     }
     this.socket.write(buffer);
+  }
+
+  private handleSecurityDefinitionResponse(message: ParsedDtcMessage): void {
+    const parsed = this.codec.parseSecurityDefinitionResponse(message);
+    const definition: SierraSecurityDefinition = {
+      symbol: parsed.symbol,
+      exchange: parsed.exchange,
+      securityType: parsed.securityType,
+      description: parsed.description,
+      known: parsed.description !== "" && parsed.securityType !== 0,
+    };
+    const key = (parsed.symbol || this.pendingSecdef.get(parsed.requestId)?.symbol || "").toUpperCase();
+    if (key) this.secdefCache.set(key, definition);
+
+    const pending = this.pendingSecdef.get(parsed.requestId);
+    if (pending) {
+      this.pendingSecdef.delete(parsed.requestId);
+      clearTimeout(pending.timer);
+      pending.resolve(definition);
+    }
+
+    // An unknown symbol string can never stream — say so immediately
+    // instead of waiting for all-zero snapshots.
+    if (key && !definition.known && this.subscriptionsBySymbol.has(key)) {
+      this.markFeedState(key, {
+        status: "UNKNOWN_SYMBOL",
+        detail: "Sierra has no definition for this symbol string — check File >> Find Symbol for the exact name.",
+      });
+      logger.warn(`[SierraDTC] ${key}: unknown symbol (no Sierra definition).`);
+    }
+  }
+
+  private markFeedState(symbol: string, state: SymbolFeedState): void {
+    this.feedStatesBySymbol.set(symbol.toUpperCase(), state);
+  }
+
+  private markStreaming(symbol: string): void {
+    const key = symbol.toUpperCase();
+    // A reject is terminal for the subscription — data must not silently
+    // clear it. Everything else yields to proof of live data.
+    if (this.feedStatesBySymbol.get(key)?.status === "REJECTED") return;
+    this.feedStatesBySymbol.set(key, { status: "STREAMING" });
   }
 
   private warnOnce(symbol: string, message: string): void {

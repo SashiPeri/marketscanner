@@ -150,6 +150,24 @@ export default function SierraBridgePanel({ config, onSync, onDisconnect, isLoad
           </div>
           <div>STATUS: <span className={config.status === "CONNECTED" ? "text-[#00e676]" : "text-gray-500"}>{config.status}</span></div>
           <div>SUBSCRIBED SYMBOLS: <span className="text-white">{symbols.length}</span></div>
+          {config.symbolStates && Object.keys(config.symbolStates).length > 0 && (
+            <div className="pt-1 space-y-0.5">
+              {Object.entries(config.symbolStates).map(([sym, feed]) => (
+                <div key={sym} className="truncate">
+                  <span className="text-white">{sym}</span>
+                  {" → "}
+                  <span className={
+                    feed.status === "STREAMING" ? "text-[#00e676]"
+                      : feed.status === "PENDING" ? "text-yellow-400"
+                        : "text-red-400"
+                  }>
+                    {feed.status}
+                  </span>
+                  {feed.detail && <span className="text-gray-500"> — {feed.detail}</span>}
+                </div>
+              ))}
+            </div>
+          )}
           <div>PORT ALIGNMENT: <span className="text-white">127.0.0.1:{localPort}</span></div>
           {config.lastSyncTime && (
             <div className="truncate">LAST SYNCED: <span className="text-[#00ffcc]">{new Date(config.lastSyncTime).toLocaleTimeString()}</span></div>

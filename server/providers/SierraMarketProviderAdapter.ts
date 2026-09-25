@@ -77,7 +77,7 @@ export class SierraMarketProviderAdapter implements MarketProvider {
   }
 
   getSierraConfig(): SierraConfig {
-    return { ...this.sierraConfig };
+    return { ...this.sierraConfig, symbolStates: this.dtcProvider.getSymbolFeedStates() };
   }
 
   syncSierra(params: SierraSyncRequest): { sierraConfig: SierraConfig; markets: MarketData[] } {
@@ -141,6 +141,34 @@ export class SierraMarketProviderAdapter implements MarketProvider {
     this.sierraConfig.status = this.mapConnectionState(status.state);
     if (status.state === "CONNECTED" && !this.sierraConfig.lastSyncTime) {
       this.sierraConfig.lastSyncTime = status.connectedAt ?? new Date().toISOString();
+    }
+    // On (re)connect, ask Sierra itself what each requested symbol is.
+    // Unknown strings (wrong suffix, expired alias) are flagged as
+    // UNKNOWN_SYMBOL; exchange-restricted products surface Sierra's reject
+    // text via the subscription path. No product list lives in this repo.
+    if (status.state === "CONNECTED") {
+      this.validateSymbols();
+    }
+  }
+
+  private validateSymbols(): void {
+    for (const symbol of this.sierraConfig.customSymbols) {
+      this.dtcProvider.requestSecurityDefinition(symbol).then(
+        (definition) => {
+          if (definition.known) {
+            this.logger.info("Sierra symbol validated", {
+              symbol,
+              description: definition.description,
+            });
+          }
+        },
+        (error: Error) => {
+          this.logger.debug("Sierra symbol validation skipped", {
+            symbol,
+            message: error.message,
+          });
+        },
+      );
     }
   }
 

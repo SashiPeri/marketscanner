@@ -94,6 +94,41 @@ describe("DtcBinaryCodec", () => {
     expect(DTC_MESSAGE_TYPES.MARKET_DATA_FEED_SYMBOL_STATUS).toBe(116);
   });
 
+  it("encodes security-definition + symbols-for-exchange requests", () => {
+    // Live-verified 2026-09-25 vs SC Build 56603: 506 validates any symbol
+    // string, 502 lists Sierra's whole universe (2689 defs observed).
+    const secdef = codec.encodeSecurityDefinitionRequest(7, "ESZ26-CME");
+    expect(secdef.readUInt16LE(2)).toBe(DTC_MESSAGE_TYPES.SECURITY_DEFINITION_FOR_SYMBOL_REQUEST);
+    expect(secdef.readInt32LE(4)).toBe(7);
+    expect(secdef.subarray(8, 8 + 9).toString("ascii")).toBe("ESZ26-CME");
+
+    const list = codec.encodeSymbolsForExchangeRequest(9000);
+    expect(list.readUInt16LE(2)).toBe(DTC_MESSAGE_TYPES.SYMBOLS_FOR_EXCHANGE_REQUEST);
+    expect(list.readInt32LE(4)).toBe(9000);
+  });
+
+  it("parses security-definition responses without overrunning", () => {
+    const body = Buffer.alloc(140);
+    body.writeUInt16LE(140, 0);
+    body.writeUInt16LE(DTC_MESSAGE_TYPES.SECURITY_DEFINITION_RESPONSE, 2);
+    body.writeInt32LE(7, 4);
+    body.write("ESZ26-CME", 8, "ascii");
+    body.writeInt32LE(1, 88);
+    body.write("E-MINI S&P 500 FUTURES ES Dec 2026", 92, "ascii");
+    const parsed = codec.parseSecurityDefinitionResponse({ size: 140, type: 507, body });
+    expect(parsed).toMatchObject({ requestId: 7, symbol: "ESZ26-CME", securityType: 1 });
+    expect(parsed.description).toContain("E-MINI");
+
+    // Unknown symbols echo back empty (bare expiry codes observed live).
+    const unknown = Buffer.alloc(140);
+    unknown.writeUInt16LE(140, 0);
+    unknown.writeUInt16LE(507, 2);
+    unknown.writeInt32LE(8, 4);
+    unknown.write("ESZ26", 8, "ascii");
+    const parsedUnknown = codec.parseSecurityDefinitionResponse({ size: 140, type: 507, body: unknown });
+    expect(parsedUnknown).toMatchObject({ symbol: "ESZ26", securityType: 0, description: "" });
+  });
+
   it("datetime helpers never throw on corrupt wire values", () => {
     for (const bad of [NaN, Infinity, -Infinity, 1e308, -5, 0]) {
       expect(dtcDateTimeToIso(bad)).toBeUndefined();

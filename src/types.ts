@@ -27,6 +27,7 @@ export interface SierraConfig {
   status: "DISCONNECTED" | "CONNECTED" | "STANDBY";
   lastSyncTime: string | null;
   customSymbols: string[];
+  symbolStates?: Record<string, { status: "PENDING" | "STREAMING" | "REJECTED" | "UNKNOWN_SYMBOL"; detail?: string }>;
 }
 
 export interface FocusAsset {

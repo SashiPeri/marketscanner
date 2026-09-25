@@ -1,89 +1,61 @@
-# Sierra DTC Live-Data Fix — Empty Snapshots (2026-09-25, live-proven)
+# Sierra DTC Live-Data Diagnosis — Empty Snapshots (live-proven 2026-09-25)
 
-## Symptom
+## TL;DR
 
-DTC TCP + logon + subscribe succeed against Sierra (`10.0.2.2:11099`,
-`SC DTC Server Build=56603`, logon result=1), but the app receives
-all-zero `MARKET_DATA_SNAPSHOT` (144-byte, every price field 0) and
-publishes nothing. The zero-guards correctly drop these, so the scanner
-stays empty.
+The pipe is healthy. **Two Sierra-side facts** explain every empty grid:
 
-## Live probe evidence (20s, `dtc-live-probe`, this VM → host Sierra)
+1. **Wrong symbol strings.** Bare expiry codes (`ESZ26`, `YMZ26`, `ZCZ26`)
+   are UNKNOWN to Sierra (security type 0, empty description) → Sierra
+   returns all-zero snapshots, which the app correctly drops. The exact
+   Sierra name is required (File >> Find Symbol), e.g. `ESZ26-CME`.
+2. **Sierra refuses to stream CME futures over DTC.** `ESZ26-CME` is a
+   known future (`E-MINI S&P 500 FUTURES ES Dec 2026`, secType 1) but the
+   server answers every market-data and market-depth request with
+   `MARKET_DATA_REJECT / MARKET_DEPTH_REJECT: "Market data request not
+   allowed"`. This matches Sierra's official DTC Server restrictions
+   (CME Group data not servable over DTC). No client code can override a
+   server reject — the app now surfaces it per symbol instead of showing
+   silent emptiness.
 
-- `ESZ25, NQZ25, ESU26, NQU26, ESZ26, NQZ26` → all-zero snapshot each,
-  zero follow-up messages (no trades, no bid/ask, no rejects).
-- `EURUSD` → zero snapshot, then **live** data: `LAST_TRADE_SNAPSHOT`
-  (134), session open/high/low/volume (120/114/115/113), settlement
-  (119), continuous `BID_ASK_COMPACT` (117) streaming.
-- `BTCUSD` → explicit `[103 MARKET_DATA_REJECT] "Market data request
-  not allowed"`.
-- One `[116 SYMBOL_STATUS]` + `[135 OPEN_INTEREST]` observed (forex path).
+## Live evidence (this VM → host Sierra `10.0.2.2:11099`, SC Build 56603)
 
-Conclusion: **the DTC pipe is healthy; Sierra is refusing/emptying
-specific symbols.** The app code was right to drop zeros.
+- `SECURITY_DEFINITION_FOR_SYMBOL_REQUEST (506)` for `ESZ26`, `ESU26`,
+  `YMZ26`, `ZCZ26`, `F.US.EPZ26` → all `secType=0, desc=""` (unknown).
+- `506` for `ESZ26-CME` → `secType=1, desc="E-MINI S&P 500 FUTURES ES
+  Dec 2026"` (known future).
+- `506` for `EURUSD` → known, streams live trades/quotes/session truth.
+- `506` for `CORNF` → known (`desc="Corn"`); ICE corn future exists as
+  `ICNZ26-ICEUS`.
+- `SYMBOLS_FOR_EXCHANGE_REQUEST (502)` → **2689 definitions**: full
+  `-CME / -CBOT / -ICEUS / -NQTV / -NYSE…` futures list plus forex/CFDs.
+- `MARKET_DATA_REQUEST (101)` for `ESZ26-CME` → explicit reject
+  `"Market data request not allowed"` (depth likewise). Zero trades,
+  zero quotes in 25s while Globex is open.
+- End-to-end through the real `SierraDtcProvider`: feed states come out
+  as `{"ESZ26-CME": {"status":"REJECTED","detail":"Market data request
+  not allowed"}, "ESZ26": {"status":"PENDING"}}`.
 
-## Root causes (Sierra-side, per official docs + probe)
+## What the app does now (generic — zero product names in code)
 
-1. **Exchange restriction (biggest).** Sierra's DTC Server docs
-   (`DTCServer.php`, modified 2026-09-02, Restrictions section):
-   > "It is not possible to access real-time or historical data from the
-   > CME Group of exchanges, EUREX, NASDAQ, CBOE, US equities … from the
-   > DTC Protocol server."
-   ES/NQ are CME products → Sierra empties/blocks them over DTC.
-   BTCUSD got an explicit reject; ES/NQ got silent zeros.
-2. **Expired contracts.** `ESZ25/NQZ25` (Dec 2025) are expired on
-   2026-09-25. Even without the restriction they carry no live tick.
-   Front months are `ESU26/NQU26` (Sep 2026) → `ESZ26/NQZ26`.
-   Probe shows even those return zeros → restriction, not just expiry.
-3. **Symbol must be exact, Exchange ignored.** Sierra docs: "The DTC
-   Server does not use the Exchange field … set Symbol to the exact
-   symbol as used within Sierra Chart (File >> Find Symbol)."
-   Sending `ESZ25-CME` or a wrong alias yields empty snapshots.
-4. **No chart open / feed disconnected.** Sierra only serves symbols
-   with an open chart + connected data feed. No chart → zeros.
-5. **Non-local IP restriction.** "Streaming/historical from an IP other
-   than local machine is not possible" without an exchange-approved
-   exemption. This VM (`10.0.2.15`) is non-local to Sierra, yet forex
-   flows — so the block is per-exchange, but a locked-down
-   `Allowed Incoming IPs` / `Require Authentication` can still bite.
+- DTC 506/507/502 codec + `requestSecurityDefinition(symbol)` with
+  cache: any customer-typed symbol (corn, YM, whatever) is validated
+  against **Sierra's own universe**, not a list in this repo.
+- Per-symbol feed truth `PENDING → STREAMING | REJECTED | UNKNOWN_SYMBOL`
+  with Sierra's detail text, exposed via `SierraConfig.symbolStates` and
+  rendered in the Bridge panel monitor. Unknown strings are flagged from
+  the definition response before any zeros arrive.
+- Zero-data guards unchanged: Sierra's all-zero "no data" snapshots are
+  dropped, never published as price 0.
 
-## Sierra-side checklist (Sashi, on the Windows host)
+## How to get live ES futures (Sierra-side, in order)
 
-1. Global Settings >> Sierra Chart Server Settings >> DTC Protocol Server:
-   Enable=Yes, Listening Port=11099, Allowed Incoming IPs=Any IP (or at
-   least Local Subnet), Require Authentication as needed (username +
-   password must then match SC login).
-2. File >> Find Symbol → copy the **exact** symbol string Sierra shows
-   (e.g. `ESU26`), use that verbatim in the scanner sync.
-3. Open a live chart for each symbol + confirm the data feed is
-   connected (Message Log shows download/connection, chart ticks live).
-4. For CME/NASDAQ live via DTC: contact Sierra support for the
-   documented exemption, or route futures through a licensed path
-   (Denali/Teton/Rithmic/CQG data service) instead of the DTC server.
-5. Quick proof the pipe works end-to-end today: sync `EURUSD` — it
-   streams live through this exact code path.
-
-## Code changes in this repo
-
-- `server/providers/sierra/dtcConstants.ts`: added
-  `MARKET_DATA_UPDATE_OPEN_INTEREST (135)` (observed live, previously
-  unlisted).
-- `server/providers/sierra/SierraDtcProvider.ts`: explicitly ignore
-  open-interest (no scanner truth) and **debug-log** `FEED_STATUS`
-  (100) / `SYMBOL_STATUS` (116) so the next empty-feed episode leaves
-  traces without a raw probe. Zero-snapshot drop + warn-once + reject
-  logging with symbol (prior `feat/feed-truth` work) is unchanged —
-  it is the correct behavior.
-- Added `MARKET_DATA_UPDATE_OPEN_INTEREST` coverage in
-  `server/providers/__tests__/codec.test.ts` (constant listed).
-
-## Path forward for live ES/NQ
-
-- Short term: demo/verify realtime with `EURUSD` (proven live); keep
-  futures on `mock` until a licensed feed exists.
-- Medium term: licensed futures feed (Denali/Teton/Rithmic/CQG) or
-  Sierra-approved DTC exemption for CME; then re-probe with exact
-  front-month symbols and open charts.
-- Re-probe command: copy `/tmp/opencode/dtc-live-probe.ts` into the
-  repo dir and run `npx tsx ./dtc-live-probe.tmp.ts` (dotenv must
-  resolve from repo root).
+1. In Sierra, File >> Find Symbol → use the **exact** string
+   (`ESZ26-CME` for Dec-26 E-mini S&P). Type exactly that in the bridge.
+2. Open its chart in Sierra with the data feed connected and ticking.
+3. Re-probe: if the reject persists, the DTC-server CME restriction is
+   in force for this install → request the documented exemption from
+   Sierra support, or feed futures through an entitled path (Denali CME
+   entitlement / Teton / Rithmic / CQG). Whatever Sierra starts serving,
+   this app picks up with no code changes — validation + states are
+   fully generic.
+4. Sanity proof the pipe is live today: sync `EURUSD` or `CORNF`.
