@@ -54,8 +54,14 @@ Project workspace: `cwd=/home/sashi/workspace/marketscanner`, `repoUrl=https://g
 
 ## Current Work
 
--
+- `feat/feed-truth` (146ff56): zero-data guards, reject logging w/ symbol, session-truth import. Verified live vs Sierra.
+- `feat/feed-truth` (cab62bb): symbols persist, grid filters/sort/null-safety/Universe panel, mock volume. Suite 81/81 green. Seat 2: proceed.
+- Branches unpushed (`feat/honest-readiness`, `feat/feed-truth`) — blocked on `gh auth login` → push + PRs.
 
 ## Handoff Notes
 
--
+- FEED LIVE-PROVEN 2026-09-25: DTC TCP+logon+subscribe succeed vs host Sierra; feed returns all-zero snapshots (no data for ESZ25/NQZ25). App drops zeros w/ warn-once, never publishes price 0.
+- SIERRA-SIDE ACTION (Sashi): open ESZ25 + NQZ25 charts in Sierra with live feed connected, then re-probe (`npx tsx /tmp/opencode/dtc-live-proof.ts`).
+- Mock mode verified live: RVol accumulates, rationale/regime/scores flow.
+- Baseline: lint clean, boot + graceful shutdown verified, `data/` gitignored.
+- Queued (not started): `UNKNOWN→RANGE_BOUND` coercion, WS/REST mapper divergence, strategy metrics (TPO/PVA/CVA), sell packaging.
