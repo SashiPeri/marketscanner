@@ -54,8 +54,9 @@ Project workspace: `cwd=/home/sashi/workspace/marketscanner`, `repoUrl=https://g
 
 ## Current Work
 
--
+- `feat/honest-readiness` (90d7019): /ready requires flowing data (`> 0` on bus/cache); +4 health tests. Full suite 75/75 green. Seat 2 reviewed, no blockers. Awaiting `gh auth login` → push + PR.
 
 ## Handoff Notes
 
--
+- Baseline 2026-09-25: lint clean, 71/71 tests, server boots (port 3000, sierra provider via .env) and shuts down gracefully. `data/` output gitignored, tree clean.
+- Next audit items queued (not started): mock-mode `sessionVolume` unset (RVol=0/VWAP cold), `UNKNOWN→RANGE_BOUND` coercion, WS/REST mapper divergence.
