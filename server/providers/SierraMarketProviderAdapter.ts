@@ -3,6 +3,7 @@ import { ScannerEngine } from "../scanner";
 import { MarketCacheService } from "../services/MarketCacheService";
 import { ConnectionStatus, MarketSnapshot } from "../types/domain";
 import { MarketData, SierraConfig, SierraSyncRequest } from "../types/market";
+import { loadCustomSymbols, saveCustomSymbols } from "./customSymbolsStore";
 import { MarketProvider } from "./MarketProvider";
 import { SierraDtcProvider } from "./sierra/SierraDtcProvider";
 import { SierraDtcConfig } from "./sierra/sierraTypes";
@@ -21,6 +22,7 @@ export class SierraMarketProviderAdapter implements MarketProvider {
   private readonly logger: Logger;
   private dtcProvider: SierraDtcProvider;
   private readonly dtcConfig: SierraDtcConfig;
+  private readonly dataDir: string;
   private sierraConfig: SierraConfig;
   private eventsBound = false;
 
@@ -29,18 +31,21 @@ export class SierraMarketProviderAdapter implements MarketProvider {
     scannerEngine: ScannerEngine,
     marketCache: MarketCacheService,
     logger: Logger,
+    options?: { dataDir?: string },
   ) {
     this.dtcConfig = { ...dtcConfig };
     this.scannerEngine = scannerEngine;
     this.marketCache = marketCache;
     this.logger = logger.child({ component: "SierraMarketProviderAdapter" });
     this.dtcProvider = new SierraDtcProvider(this.dtcConfig);
+    this.dataDir = options?.dataDir ?? "data";
     this.sierraConfig = {
       localPort: dtcConfig.port,
       connectionType: "DTC_PROTOCOL",
       status: "STANDBY",
       lastSyncTime: null,
-      customSymbols: [],
+      // Restored from disk — no longer lost on restart.
+      customSymbols: loadCustomSymbols(this.dataDir),
     };
 
     // Sierra mode starts EMPTY: no mock seeding. A symbol appears in the
@@ -50,6 +55,15 @@ export class SierraMarketProviderAdapter implements MarketProvider {
 
   start(): void {
     this.bindDtcEvents();
+    // Auto-restore: previously subscribed products reconnect without a
+    // manual sync call. With no restored symbols, stay STANDBY as before.
+    if (this.sierraConfig.customSymbols.length > 0) {
+      for (const symbol of this.sierraConfig.customSymbols) {
+        this.subscribeSymbol(symbol);
+      }
+      this.sierraConfig.status = "STANDBY";
+      this.dtcProvider.connect();
+    }
   }
 
   stop(): void {
@@ -79,6 +93,7 @@ export class SierraMarketProviderAdapter implements MarketProvider {
 
     if (customSymbols && Array.isArray(customSymbols) && customSymbols.length > 0) {
       this.sierraConfig.customSymbols = customSymbols.map((symbol) => symbol.toUpperCase().trim());
+      saveCustomSymbols(this.dataDir, this.sierraConfig.customSymbols);
       for (const symbol of this.sierraConfig.customSymbols) {
         this.subscribeSymbol(symbol);
       }

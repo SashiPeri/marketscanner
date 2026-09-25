@@ -25,9 +25,11 @@ export function createMarketProvider(
       config.sierra.password,
     );
 
-    return new SierraMarketProviderAdapter(dtcConfig, scannerEngine, marketCache, logger);
+    return new SierraMarketProviderAdapter(dtcConfig, scannerEngine, marketCache, logger, {
+      dataDir: config.dataDir,
+    });
   }
 
   logger.info("Using mock market provider");
-  return new MockMarketProvider(scannerEngine, marketCache, logger);
+  return new MockMarketProvider(scannerEngine, marketCache, logger, { dataDir: config.dataDir });
 }

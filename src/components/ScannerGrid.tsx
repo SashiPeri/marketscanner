@@ -41,6 +41,10 @@ function ScoreBar({ score }: { score: number }) {
   );
 }
 
+// Backend may send nulls for not-yet-computed metrics (honest empty state).
+// The type says number; the wire says maybe-null. Guard at runtime.
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
 export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }: ScannerGridProps) {
   const { config, watchlist, entitlement, addSymbol, removeSymbol, updateConfig } = useScannerConfig();
   const selectedIndicators: IndicatorId[] = config?.selectedIndicators ?? DEFAULT_SELECTED;
@@ -195,6 +199,46 @@ export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }:
       </div>
 
       {/* Spreadsheet / Terminal Grid Table */}
+      {showUniverseManager && (
+        <div className="bg-[#111419] px-3 py-2 border-b border-[#1a2030]">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 max-w-[220px]">
+              <Search className="w-3 h-3 text-gray-500 absolute left-2 top-1/2 -translate-y-1/2" />
+              <input
+                value={newSymbolInput}
+                onChange={(e) => setNewSymbolInput(e.target.value.toUpperCase())}
+                onKeyDown={(e) => { if (e.key === "Enter") void handleAddSymbol(); }}
+                placeholder="ADD SYMBOL (ESZ25)"
+                className="w-full bg-[#0b0c10] border border-gray-700 rounded pl-7 pr-2 py-1 text-[11px] text-white placeholder-gray-600 outline-none focus:border-orange-500 font-mono"
+              />
+            </div>
+            <button
+              onClick={() => void handleAddSymbol()}
+              className="px-2 py-1 rounded text-[10px] font-bold bg-orange-500 text-black flex items-center gap-1 cursor-pointer"
+            >
+              <Plus className="w-3 h-3" /> Add
+            </button>
+            <span className="text-gray-500 text-[10px]">{watchlist.length}{entitlement ? `/${entitlement.maxSymbols}` : ""} tracked</span>
+          </div>
+          {addError && <div className="text-[#ff1744] text-[10px] mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{addError}</div>}
+          {watchlist.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {watchlist.map((w) => (
+                <span key={w.symbol} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#0b0c10] border border-gray-700 text-[10px] text-[#45f3ff] font-bold">
+                  {w.symbol}
+                  <button
+                    onClick={() => { void removeSymbol(w.symbol); }}
+                    className="text-gray-500 hover:text-[#ff1744] cursor-pointer"
+                    title={`Remove ${w.symbol}`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className="overflow-auto flex-1">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
@@ -202,26 +246,28 @@ export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }:
               <th className="p-2 border-r border-[#1f2833]">SYMBOL</th>
               <th className="p-2 border-r border-[#1f2833]">LAST</th>
               <th className="p-2 border-r border-[#1f2833]">NET %CHG</th>
-              <th className="p-2 border-r border-[#1f2833] text-center">RVOL (10D)</th>
-              <th className="p-2 border-r border-[#1f2833] text-center">ADR FILL%</th>
+              <th className="p-2 border-r border-[#1f2833] text-center cursor-pointer hover:bg-[#1a2030]" onClick={() => handleSortChange("rvol")}>RVOL (10D)<SortIcon col="rvol" /></th>
+              <th className="p-2 border-r border-[#1f2833] text-center cursor-pointer hover:bg-[#1a2030]" onClick={() => handleSortChange("adr")}>ADR FILL%<SortIcon col="adr" /></th>
               <th className="p-2 border-r border-[#1f2833] text-center">VALUE AREA (VAL-VAH)</th>
               <th className="p-2 border-r border-[#1f2833]">REGIME TYPE</th>
-              <th className="p-2 border-r border-[#1f2833] text-center">EDGE</th>
+              <th className="p-2 border-r border-[#1f2833] text-center cursor-pointer hover:bg-[#1a2030]" onClick={() => handleSortChange("score")}>EDGE<SortIcon col="score" /></th>
               <th className="p-2 text-center">GRADE</th>
             </tr>
           </thead>
           <tbody>
-            {markets.map((m) => {
+            {filteredMarkets.map((m) => {
               const isSelected = m.symbol === selectedSymbol;
               const isPositive = m.pctChange >= 0;
-              const highRvol = m.rvol >= 1.4;
-              const adrOverextended = m.adrFilledPct >= 100;
+              const highRvol = isNum(m.rvol) && m.rvol >= 1.4;
+              const adrOverextended = isNum(m.adrFilledPct) && m.adrFilledPct >= 100;
+              const vaOk = isNum(m.val) && isNum(m.vah) && isNum(m.poc) && m.vah > m.val;
 
               return (
                 <tr
                   key={m.symbol}
                   id={`row-${m.symbol}`}
                   onClick={() => onSelectMarket(m.symbol)}
+                  title={m.rationale || undefined}
                   className={`border-b border-[#1f2833] cursor-pointer transition-colors duration-150 ${
                     isSelected ? "bg-[#122c3a] text-white" : "hover:bg-[#1a222d]"
                   }`}
@@ -255,18 +301,19 @@ export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }:
                   {/* Relative Volume (RVol) */}
                   <td className={`p-2 border-r border-[#1f2833] text-center font-bold`}>
                     <span className={`px-2 py-0.5 rounded text-[11px] ${
-                      highRvol 
-                        ? "bg-[#00e67625] text-[#00ffcc] border border-[#00ffcc55]" 
-                        : m.rvol < 0.8 
-                          ? "bg-[#ff174415] text-[#ff1744]" 
+                      highRvol
+                        ? "bg-[#00e67625] text-[#00ffcc] border border-[#00ffcc55]"
+                        : isNum(m.rvol) && m.rvol < 0.8
+                          ? "bg-[#ff174415] text-[#ff1744]"
                           : "text-gray-300"
                     }`}>
-                      {m.rvol}x
+                      {isNum(m.rvol) ? `${m.rvol}x` : "—"}
                     </span>
                   </td>
 
                   {/* ADR Filled Percentage */}
                   <td className="p-2 border-r border-[#1f2833]">
+                    {isNum(m.adrFilledPct) ? (
                     <div className="flex flex-col items-center gap-1">
                       <div className="w-full bg-[#151a22] rounded-full h-1.5 max-w-[70px] overflow-hidden border border-gray-800">
                         <div
@@ -278,10 +325,14 @@ export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }:
                         {m.adrFilledPct}% {adrOverextended ? "EXHAUSTED" : ""}
                       </span>
                     </div>
+                    ) : (
+                      <div className="text-center text-gray-600 text-[11px]">—</div>
+                    )}
                   </td>
 
                   {/* Value Area High/Low Range Indicator */}
                   <td className="p-2 border-r border-[#1f2833] text-center">
+                    {vaOk ? (
                     <div className="flex flex-col items-center">
                       <div className="flex justify-between w-full text-[9px] text-gray-500 max-w-[120px]">
                         <span>VAL: {m.val}</span>
@@ -289,21 +340,24 @@ export default function ScannerGrid({ markets, onSelectMarket, selectedSymbol }:
                       </div>
                       <div className="relative w-full max-w-[120px] bg-gray-800 h-2 rounded mt-0.5 overflow-hidden">
                         {/* Highlights POC marker as yellow strip */}
-                        <div 
+                        <div
                           className="absolute h-full w-1 bg-yellow-500 z-10"
                           style={{ left: `${((m.poc - m.val) / (m.vah - m.val || 1)) * 100}%` }}
                           title={`POC: ${m.poc}`}
                         />
                         {/* Highlight active current price spot */}
-                        <div 
+                        <div
                           className="absolute w-2 h-2 rounded-full bg-[#45f3ff] border border-black"
-                          style={{ 
+                          style={{
                             left: `${Math.min(Math.max(((m.lastPrice - m.val) / (m.vah - m.val || 1)) * 100, 0), 100)}%`,
                             transform: 'translateX(-50%)'
                           }}
                         />
                       </div>
                     </div>
+                    ) : (
+                      <div className="text-gray-600 text-[11px]">—</div>
+                    )}
                   </td>
 
                   {/* Regime Type */}

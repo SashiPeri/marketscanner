@@ -8,6 +8,7 @@ import {
 import { MarketCacheService } from "../services/MarketCacheService";
 import { InstrumentIdentity, MarketSnapshot } from "../types/domain";
 import { MarketData, SierraConfig, SierraSyncRequest } from "../types/market";
+import { loadCustomSymbols, saveCustomSymbols } from "./customSymbolsStore";
 import { MarketProvider } from "./MarketProvider";
 
 const MARKET_SIMULATION_INTERVAL_MS = 3000;
@@ -18,6 +19,8 @@ export class MockMarketProvider implements MarketProvider {
   private readonly marketCache: MarketCacheService;
   private readonly logger: Logger;
   private interval: NodeJS.Timeout | null = null;
+  private readonly dataDir: string;
+  private readonly mockVolume = new Map<string, number>();
   private sierraConfig: SierraConfig = {
     localPort: 8080,
     connectionType: "HTTP_SERVER",
@@ -26,15 +29,28 @@ export class MockMarketProvider implements MarketProvider {
     customSymbols: [],
   };
 
-  constructor(scannerEngine: ScannerEngine, marketCache: MarketCacheService, logger: Logger) {
+  constructor(
+    scannerEngine: ScannerEngine,
+    marketCache: MarketCacheService,
+    logger: Logger,
+    options?: { dataDir?: string },
+  ) {
     this.scannerEngine = scannerEngine;
     this.marketCache = marketCache;
     this.logger = logger.child({ component: "MockMarketProvider" });
+    this.dataDir = options?.dataDir ?? "data";
     this.scannerEngine.seedBaselines(initialMarkets.map(marketDataToBaseline));
     this.marketCache.seed(initialMarkets);
 
     for (const market of initialMarkets) {
       this.seedScannerState(market);
+    }
+
+    // Restored mock-sierra symbols survive restarts like the real adapter.
+    const restored = loadCustomSymbols(this.dataDir);
+    if (restored.length > 0) {
+      this.sierraConfig.customSymbols = restored;
+      for (const symbol of restored) this.addMockSierraSymbol(symbol);
     }
   }
 
@@ -51,6 +67,10 @@ export class MockMarketProvider implements MarketProvider {
         const newPctChange = Number(((newNetChange / market.open) * 100).toFixed(2));
         const newHigh = newPrice > market.high ? newPrice : market.high;
         const newLow = newPrice < market.low ? newPrice : market.low;
+        // Synthetic but accumulating volume: lets RVol/VWAP behave like a
+        // live session instead of sitting at zero. Openly mock — never real.
+        const newVolume = (this.mockVolume.get(market.symbol) ?? 0) + 1 + Math.floor(Math.random() * 9);
+        this.mockVolume.set(market.symbol, newVolume);
 
         const snapshot: MarketSnapshot = {
           instrument: this.toInstrument(market),
@@ -61,6 +81,7 @@ export class MockMarketProvider implements MarketProvider {
           previousClose: market.prevClose,
           netChange: newNetChange,
           percentChange: newPctChange,
+          sessionVolume: newVolume,
           receivedAt: new Date().toISOString(),
         };
 
@@ -99,6 +120,7 @@ export class MockMarketProvider implements MarketProvider {
 
     if (customSymbols && Array.isArray(customSymbols) && customSymbols.length > 0) {
       this.sierraConfig.customSymbols = customSymbols;
+      saveCustomSymbols(this.dataDir, customSymbols);
       customSymbols.forEach((symbol) => this.addMockSierraSymbol(symbol));
     }
 
