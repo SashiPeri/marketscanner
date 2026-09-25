@@ -94,6 +94,7 @@ export default function SierraBridgePanel({ config, onSync, onDisconnect, isLoad
               <option value="HTTP_SERVER">Sierra HTTP REST</option>
               <option value="DTC_PROTOCOL">DTC Protocol (Live)</option>
               <option value="FILE_SYNC">Local File Sync</option>
+              <option value="ACSIL_BRIDGE">ACSIL Bridge (CME futures)</option>
             </select>
           </div>
         </div>

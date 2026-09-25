@@ -1,3 +1,4 @@
+import type { SymbolFeedState, SymbolFeedStatus } from "../../types/market";
 import {
   ConnectionStatus,
   InstrumentIdentity,
@@ -5,6 +6,8 @@ import {
   OrderBookSnapshot,
   TradePrint,
 } from "../../types";
+
+export type { SymbolFeedState, SymbolFeedStatus };
 
 export interface SierraDtcConfig {
   host: string;
@@ -124,13 +127,4 @@ export interface ParsedSecurityDefinition {
   exchange: string;
   securityType: number;
   description: string;
-}
-
-/** Per-symbol feed truth surfaced to the UI — never a silent empty grid. */
-export type SymbolFeedStatus = "PENDING" | "STREAMING" | "REJECTED" | "UNKNOWN_SYMBOL";
-
-export interface SymbolFeedState {
-  status: SymbolFeedStatus;
-  /** Sierra's own words: reject text, secdef description, etc. */
-  detail?: string;
 }

@@ -2,6 +2,7 @@ import { ServerConfig } from "../config";
 import { Logger } from "../logging";
 import { ScannerEngine } from "../scanner";
 import { MarketCacheService } from "../services/MarketCacheService";
+import { AcsilMarketProvider } from "./acsil/AcsilMarketProvider";
 import { MarketProvider } from "./MarketProvider";
 import { MockMarketProvider } from "./MockMarketProvider";
 import { SierraMarketProviderAdapter, createSierraDtcConfig } from "./SierraMarketProviderAdapter";
@@ -12,6 +13,17 @@ export function createMarketProvider(
   marketCache: MarketCacheService,
   logger: Logger,
 ): MarketProvider {
+  if (config.marketProvider === "acsil") {
+    logger.info("Using ACSIL bridge market provider", {
+      port: config.acsil.port,
+    });
+
+    return new AcsilMarketProvider(scannerEngine, marketCache, logger, {
+      port: config.acsil.port,
+      dataDir: config.dataDir,
+    });
+  }
+
   if (config.marketProvider === "sierra") {
     logger.info("Using Sierra market provider", {
       host: config.sierra.host,

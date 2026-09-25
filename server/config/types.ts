@@ -1,5 +1,5 @@
 export type AppEnvironment = "development" | "production" | "testing";
-export type MarketProviderType = "mock" | "sierra";
+export type MarketProviderType = "mock" | "sierra" | "acsil";
 export type PersistenceMode = "memory" | "json";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -10,12 +10,18 @@ export interface SierraConnectionConfig {
   password?: string;
 }
 
+export interface AcsilBridgeConfig {
+  /** Local TCP port the ACSIL study dials into (scanner listens). */
+  port: number;
+}
+
 export interface ServerConfig {
   port: number;
   nodeEnv: AppEnvironment;
   geminiApiKey?: string;
   marketProvider: MarketProviderType;
   sierra: SierraConnectionConfig;
+  acsil: AcsilBridgeConfig;
   logLevel: LogLevel;
   persistenceMode: PersistenceMode;
   dataDir: string;
@@ -35,6 +41,7 @@ export const CONFIG_DEFAULTS = {
   marketProvider: "mock" as MarketProviderType,
   sierraHost: "127.0.0.1",
   sierraPort: 11099,
+  acsilPort: 18199,
   logLevel: "info" as LogLevel,
   persistenceMode: "json" as PersistenceMode,
   dataDir: "data",

@@ -58,6 +58,9 @@ export function loadConfig(): ServerConfig {
         username: process.env.SIERRA_USERNAME,
         password: process.env.SIERRA_PASSWORD,
       },
+      acsil: {
+        port: Number(process.env.ACSIL_PORT || CONFIG_DEFAULTS.acsilPort),
+      },
       logLevel: "error",
       persistenceMode: "memory",
       dataDir: process.env.DATA_DIR || "data/test",
@@ -73,6 +76,11 @@ export function loadConfig(): ServerConfig {
     throw new ConfigValidationError(`Invalid SIERRA_PORT: ${process.env.SIERRA_PORT}`);
   }
 
+  const acsilPort = Number(process.env.ACSIL_PORT || CONFIG_DEFAULTS.acsilPort);
+  if (!Number.isInteger(acsilPort) || acsilPort < 1 || acsilPort > 65535) {
+    throw new ConfigValidationError(`Invalid ACSIL_PORT: ${process.env.ACSIL_PORT}`);
+  }
+
   const maxSymbolsRaw = process.env.MAX_SYMBOLS;
   const maxSymbols = maxSymbolsRaw ? Number(maxSymbolsRaw) : undefined;
 
@@ -80,12 +88,15 @@ export function loadConfig(): ServerConfig {
     port: parsePort(process.env.PORT),
     nodeEnv,
     geminiApiKey: process.env.GEMINI_API_KEY,
-    marketProvider: marketProviderRaw === "sierra" ? "sierra" : "mock",
+    marketProvider: marketProviderRaw === "sierra" || marketProviderRaw === "acsil" ? marketProviderRaw : "mock",
     sierra: {
       host: process.env.SIERRA_HOST || CONFIG_DEFAULTS.sierraHost,
       port: sierraPort,
       username: process.env.SIERRA_USERNAME,
       password: process.env.SIERRA_PASSWORD,
+    },
+    acsil: {
+      port: acsilPort,
     },
     logLevel: parseLogLevel(process.env.LOG_LEVEL),
     persistenceMode: parsePersistenceMode(process.env.PERSISTENCE_MODE),

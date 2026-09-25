@@ -23,7 +23,7 @@ export interface MarketData {
 
 export interface SierraConfig {
   localPort: number;
-  connectionType: "HTTP_SERVER" | "DTC_PROTOCOL" | "FILE_SYNC";
+  connectionType: "HTTP_SERVER" | "DTC_PROTOCOL" | "FILE_SYNC" | "ACSIL_BRIDGE";
   status: "DISCONNECTED" | "CONNECTED" | "STANDBY";
   lastSyncTime: string | null;
   customSymbols: string[];
