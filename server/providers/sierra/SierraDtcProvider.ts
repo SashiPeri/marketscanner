@@ -17,6 +17,7 @@ import {
   ParsedDepthLevel,
   ParsedDtcMessage,
   ParsedMarketSnapshot,
+  ParsedSessionUpdate,
   ParsedTradeUpdate,
   SierraDtcConfig,
   SierraProviderEvents,
@@ -54,6 +55,7 @@ export class SierraDtcProvider extends EventEmitter {
   private connectedAt: string | undefined;
   private lastMessageAt: string | undefined;
   private lastError: string | undefined;
+  private readonly warnedOnce = new Set<string>();
 
   constructor(private readonly config: SierraDtcConfig) {
     super();
@@ -220,8 +222,20 @@ export class SierraDtcProvider extends EventEmitter {
         break;
 
       case DTC_MESSAGE_TYPES.MARKET_DATA_REJECT:
-      case DTC_MESSAGE_TYPES.MARKET_DEPTH_REJECT:
-        logger.warn(`[SierraDTC] Subscription rejected for message type ${message.type}.`);
+      case DTC_MESSAGE_TYPES.MARKET_DEPTH_REJECT: {
+        const reject = this.codec.parseReject(message);
+        const symbol = this.symbolById.get(reject.symbolId) ?? `#${reject.symbolId}`;
+        const kind = message.type === DTC_MESSAGE_TYPES.MARKET_DEPTH_REJECT ? "depth" : "data";
+        logger.warn(`[SierraDTC] ${kind} subscription rejected for ${symbol}: ${reject.text || "no reason given"}.`);
+        break;
+      }
+
+      case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_VOLUME:
+      case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_HIGH:
+      case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_LOW:
+      case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_SETTLEMENT:
+      case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_OPEN:
+        this.handleSessionUpdate(this.codec.parseSessionUpdate(message));
         break;
 
       default:
@@ -258,13 +272,22 @@ export class SierraDtcProvider extends EventEmitter {
 
   private handleMarketSnapshot(parsed: ParsedMarketSnapshot): void {
     const symbol = this.symbolById.get(parsed.symbolId);
-    if (!symbol || parsed.lastPrice === undefined) return;
+    if (!symbol) return;
 
     const previous = this.snapshotsBySymbol.get(symbol);
+    // Sierra sends all-zero snapshots when it has no data for a symbol.
+    // Zero is not a price: fall back to the last known price, and emit
+    // nothing at all when no price has ever been seen.
+    const lastPrice = parsed.lastPrice && parsed.lastPrice > 0 ? parsed.lastPrice : previous?.lastPrice;
+    if (lastPrice === undefined) {
+      this.warnOnce(symbol, "empty snapshot with no known price — dropped (feed has no data yet)");
+      return;
+    }
+
     const instrument = this.getInstrument(symbol);
     const snapshot: MarketSnapshot = {
       instrument,
-      lastPrice: parsed.lastPrice,
+      lastPrice,
       bidPrice: parsed.bidPrice ?? previous?.bidPrice,
       askPrice: parsed.askPrice ?? previous?.askPrice,
       bidSize: parsed.bidSize ?? previous?.bidSize,
@@ -273,8 +296,8 @@ export class SierraDtcProvider extends EventEmitter {
       high: parsed.high ?? previous?.high,
       low: parsed.low ?? previous?.low,
       previousClose: parsed.previousClose ?? previous?.previousClose,
-      netChange: parsed.previousClose ? parsed.lastPrice - parsed.previousClose : previous?.netChange,
-      percentChange: parsed.previousClose ? ((parsed.lastPrice - parsed.previousClose) / parsed.previousClose) * 100 : previous?.percentChange,
+      netChange: parsed.previousClose ? lastPrice - parsed.previousClose : previous?.netChange,
+      percentChange: parsed.previousClose ? ((lastPrice - parsed.previousClose) / parsed.previousClose) * 100 : previous?.percentChange,
       sessionVolume: parsed.sessionVolume ?? previous?.sessionVolume,
       providerTimestamp: parsed.providerTimestamp,
       receivedAt: nowIso(),
@@ -284,10 +307,37 @@ export class SierraDtcProvider extends EventEmitter {
     this.emit("marketSnapshot", snapshot);
   }
 
+  private handleSessionUpdate(parsed: ParsedSessionUpdate | undefined): void {
+    if (!parsed) return;
+    const symbol = this.symbolById.get(parsed.symbolId);
+    if (!symbol) return;
+    const previous = this.snapshotsBySymbol.get(symbol);
+    // Session truth enriches a known snapshot; it never creates one from
+    // nothing, and settlement never overwrites a real reference price.
+    if (!previous) return;
+    if (parsed.field === "previousClose" && previous.previousClose !== undefined) return;
+    const snapshot: MarketSnapshot = { ...previous, receivedAt: nowIso() };
+    if (parsed.field === "previousClose") {
+      snapshot.previousClose = parsed.value;
+      snapshot.netChange = snapshot.lastPrice - parsed.value;
+      snapshot.percentChange = ((snapshot.lastPrice - parsed.value) / parsed.value) * 100;
+    } else {
+      snapshot[parsed.field] = parsed.value;
+    }
+    this.snapshotsBySymbol.set(symbol, snapshot);
+    this.emit("marketSnapshot", snapshot);
+  }
+
   private handleTradeUpdate(parsed: ParsedTradeUpdate | undefined): void {
     if (!parsed) return;
     const symbol = this.symbolById.get(parsed.symbolId);
     if (!symbol) return;
+    // A zero/invalid print is not a print — drop it before it can move
+    // high/low, volume, or the scanner.
+    if (!Number.isFinite(parsed.price) || parsed.price <= 0) {
+      this.warnOnce(symbol, `invalid print at ${parsed.price} — dropped`);
+      return;
+    }
 
     const instrument = this.getInstrument(symbol);
     const tradePrint: TradePrint = {
@@ -333,9 +383,15 @@ export class SierraDtcProvider extends EventEmitter {
     const previous = this.snapshotsBySymbol.get(symbol);
     if (!previous && parsed.bidPrice === undefined && parsed.askPrice === undefined) return;
 
+    // Quote-only noise with no reference price tells us nothing — and the
+    // old `?? 0` fallback fabricated a price of zero. Positive quotes only.
+    const quoteRef = [parsed.bidPrice, parsed.askPrice].find((p) => p !== undefined && p > 0);
+    const lastPrice = previous?.lastPrice ?? quoteRef;
+    if (lastPrice === undefined) return;
+
     const snapshot: MarketSnapshot = {
       instrument: this.getInstrument(symbol),
-      lastPrice: previous?.lastPrice ?? parsed.bidPrice ?? parsed.askPrice ?? 0,
+      lastPrice,
       bidPrice: parsed.bidPrice ?? previous?.bidPrice,
       askPrice: parsed.askPrice ?? previous?.askPrice,
       bidSize: parsed.bidSize ?? previous?.bidSize,
@@ -467,8 +523,20 @@ export class SierraDtcProvider extends EventEmitter {
   }
 
   private writeIfConnected(buffer: Buffer): void {
-    if (!this.socket || this.socket.destroyed) return;
+    if (!this.socket || this.socket.destroyed) {
+      // Drops here self-heal: subscriptions are registered first and
+      // re-sent by resubscribeAll() on logon. Debug-level to stay quiet.
+      logger.debug("[SierraDTC] write dropped — socket not connected (resubscribes on logon).");
+      return;
+    }
     this.socket.write(buffer);
+  }
+
+  private warnOnce(symbol: string, message: string): void {
+    const key = `${symbol}:${message}`;
+    if (this.warnedOnce.has(key)) return;
+    this.warnedOnce.add(key);
+    logger.warn(`[SierraDTC] ${symbol}: ${message}`);
   }
 
   private setStatus(state: ConnectionState): void {

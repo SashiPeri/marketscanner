@@ -39,6 +39,19 @@ export interface ParsedDtcMessage {
   body: Buffer;
 }
 
+export interface ParsedDtcReject {
+  symbolId: number;
+  text: string;
+}
+
+export type SessionTruthField = "sessionVolume" | "high" | "low" | "previousClose" | "open";
+
+export interface ParsedSessionUpdate {
+  symbolId: number;
+  field: SessionTruthField;
+  value: number;
+}
+
 export interface ParsedLogonResponse {
   result: number;
   resultText: string;

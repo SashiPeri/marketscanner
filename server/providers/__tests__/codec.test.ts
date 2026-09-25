@@ -54,6 +54,38 @@ describe("DtcBinaryCodec", () => {
     expect(parsed).toEqual({ symbolId: 7 });
   });
 
+  it("parses reject with symbol id and reason text", () => {
+    const body = Buffer.alloc(80);
+    body.writeUInt16LE(80, 0);
+    body.writeUInt16LE(DTC_MESSAGE_TYPES.MARKET_DATA_REJECT, 2);
+    body.writeUInt32LE(3, 4);
+    body.write("NO_DATA_AVAILABLE", 8, "ascii");
+    const parsed = codec.parseReject({ size: 80, type: DTC_MESSAGE_TYPES.MARKET_DATA_REJECT, body });
+    expect(parsed.symbolId).toBe(3);
+    expect(parsed.text).toBe("NO_DATA_AVAILABLE");
+  });
+
+  it("parses session-truth updates and rejects zero values", () => {
+    const high = Buffer.alloc(32);
+    high.writeUInt16LE(32, 0);
+    high.writeUInt16LE(DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_HIGH, 2);
+    high.writeUInt32LE(1, 4);
+    high.writeDoubleLE(5020.5, 8);
+    expect(codec.parseSessionUpdate({ size: 32, type: DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_HIGH, body: high }))
+      .toEqual({ symbolId: 1, field: "high", value: 5020.5 });
+
+    const zero = Buffer.alloc(32);
+    zero.writeUInt16LE(32, 0);
+    zero.writeUInt16LE(DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_VOLUME, 2);
+    zero.writeUInt32LE(1, 4);
+    zero.writeDoubleLE(0, 8);
+    expect(codec.parseSessionUpdate({ size: 32, type: DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_VOLUME, body: zero }))
+      .toBeUndefined();
+
+    expect(codec.parseSessionUpdate({ size: 32, type: DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_TRADE, body: zero }))
+      .toBeUndefined();
+  });
+
   it("datetime helpers never throw on corrupt wire values", () => {
     for (const bad of [NaN, Infinity, -Infinity, 1e308, -5, 0]) {
       expect(dtcDateTimeToIso(bad)).toBeUndefined();

@@ -14,16 +14,28 @@ import {
   ParsedBidAskUpdate,
   ParsedDepthLevel,
   ParsedDtcMessage,
+  ParsedDtcReject,
   ParsedLogonResponse,
   ParsedMarketSnapshot,
+  ParsedSessionUpdate,
   ParsedTradeUpdate,
+  SessionTruthField,
   SierraDtcConfig,
 } from "./sierraTypes";
 
-export class DtcBinaryCodec {
-  private pending = Buffer.alloc(0);
+function sessionFieldForType(type: number): SessionTruthField | undefined {
+  switch (type) {
+    case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_VOLUME: return "sessionVolume";
+    case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_HIGH: return "high";
+    case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_LOW: return "low";
+    case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_SETTLEMENT: return "previousClose";
+    case DTC_MESSAGE_TYPES.MARKET_DATA_UPDATE_SESSION_OPEN: return "open";
+    default: return undefined;
+  }
+}
 
-  encodeEncodingRequest(): Buffer {
+export class DtcBinaryCodec {
+  private pending = Buffer.alloc(0);  encodeEncodingRequest(): Buffer {
     const buffer = Buffer.alloc(DTC_STRUCT_SIZES.ENCODING_REQUEST);
     buffer.writeUInt16LE(DTC_STRUCT_SIZES.ENCODING_REQUEST, 0);
     buffer.writeUInt16LE(DTC_MESSAGE_TYPES.ENCODING_REQUEST, 2);
@@ -321,6 +333,35 @@ export class DtcBinaryCodec {
 
   isDepthDelete(updateType?: number): boolean {
     return updateType === DTC_MARKET_DEPTH_UPDATE_TYPE.DELETE_LEVEL;
+  }
+
+  /**
+   * s_MarketDataReject / s_MarketDepthReject: SymbolID@4, RejectText[64]@8.
+   * Always safe on short bodies — returns symbol 0 + empty text.
+   */
+  parseReject(message: ParsedDtcMessage): ParsedDtcReject {
+    const body = message.body;
+    return {
+      symbolId: body.length >= 8 ? body.readUInt32LE(4) : 0,
+      text: body.length > 8 ? readFixedAscii(body, 8, Math.min(64, body.length - 8)) : "",
+    };
+  }
+
+  /**
+   * Sierra-computed session truth (the "import, don't reimplement" path):
+   * 113 volume, 114 high, 115 low, 119 settlement, 120 open.
+   * All carry SymbolID@4 + one double@8. Returns undefined for other types
+   * or non-positive values (a zero high/low/volume is Sierra saying
+   * "no data", never a fact about the market).
+   */
+  parseSessionUpdate(message: ParsedDtcMessage): ParsedSessionUpdate | undefined {
+    const field = sessionFieldForType(message.type);
+    if (!field) return undefined;
+    const body = message.body;
+    if (body.length < 16) return undefined;
+    const value = body.readDoubleLE(8);
+    if (!Number.isFinite(value) || value <= 0) return undefined;
+    return { symbolId: body.readUInt32LE(4), field, value };
   }
 
   private mapAggressorSide(value: number): "BUY" | "SELL" | "UNKNOWN" {
